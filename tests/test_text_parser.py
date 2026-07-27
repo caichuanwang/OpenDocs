@@ -12,6 +12,7 @@ from opendocs import (
     UnsupportedDocumentError,
 )
 from opendocs._models import DocumentType, MarkdownBlock, TextBlock
+from opendocs.markdown import render_markdown
 from opendocs.parsers.registry import build_default_registry
 from opendocs.source import ResolvedSource
 
@@ -44,6 +45,40 @@ async def test_text_parser_splits_paragraphs_without_markdown_interpretation(
     )
 
     assert document.blocks == (TextBlock(text="first"), TextBlock(text="*literal*\n"))
+
+
+@pytest.mark.asyncio
+async def test_text_parser_consumes_consecutive_blank_separator_lines(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "paragraphs.txt"
+    path.write_bytes(b"alpha\n\n\nbeta")
+    parser = build_default_registry().get(DocumentType.TEXT)
+
+    document = await parser.parse(
+        ResolvedSource(path=path, original_name=path.name, owned=False),
+        options=ParseOptions(),
+    )
+
+    assert document.blocks == (TextBlock(text="alpha"), TextBlock(text="beta"))
+    assert render_markdown(document, max_output_chars=400_000).markdown == "alpha\n\nbeta\n"
+
+
+@pytest.mark.asyncio
+async def test_text_parser_consumes_whitespace_only_separator_lines(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "whitespace.txt"
+    path.write_bytes(b"alpha\n \t\n\t \n beta\n")
+    parser = build_default_registry().get(DocumentType.TEXT)
+
+    document = await parser.parse(
+        ResolvedSource(path=path, original_name=path.name, owned=False),
+        options=ParseOptions(),
+    )
+
+    assert document.blocks == (TextBlock(text="alpha"), TextBlock(text=" beta\n"))
+    assert render_markdown(document, max_output_chars=400_000).markdown == "alpha\n\n beta\n"
 
 
 @pytest.mark.asyncio

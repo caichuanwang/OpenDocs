@@ -9,7 +9,7 @@ from opendocs.options import ParseOptions
 from opendocs.source import ResolvedSource
 
 _MAX_TEXT_BYTES = 20_000_000
-_PARAGRAPH_BREAK = re.compile(r"\n[ \t]*\n")
+_PARAGRAPH_BREAK = re.compile(r"\n(?:[ \t]*\n)+")
 
 
 def _read_utf8(source: ResolvedSource) -> str:
