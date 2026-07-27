@@ -88,6 +88,7 @@ async def test_cleanup_failure_preserves_primary_exception(
     assert temporary_path.exists()
     notes = getattr(exc_info.value, "__notes__", [])
     assert any("cleanup blocked" in note for note in notes)
+    temporary_path.unlink(missing_ok=True)
 
 
 @pytest.mark.asyncio
