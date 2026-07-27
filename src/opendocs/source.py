@@ -132,22 +132,16 @@ def _warn_cleanup_failure(path: Path, error: BaseException) -> None:
     )
 
 
-def _consume_task_exception(task: asyncio.Task[object]) -> None:
+def _consume_task_exception(task: asyncio.Task[object], path: Path) -> None:
     if not task.cancelled():
         exception = task.exception()
         if exception is not None:
-            task_name = task.get_name()
-            if task_name.startswith("cleanup-owned-source:"):
-                path = Path(task_name.removeprefix("cleanup-owned-source:"))
-                _warn_cleanup_failure(path, exception)
+            _warn_cleanup_failure(path, exception)
 
 
 def _schedule_background_cleanup(path: Path) -> None:
-    cleanup_task = asyncio.create_task(
-        _cleanup_owned_path(path),
-        name=f"cleanup-owned-source:{path}",
-    )
-    cleanup_task.add_done_callback(_consume_task_exception)
+    cleanup_task = asyncio.create_task(_cleanup_owned_path(path))
+    cleanup_task.add_done_callback(lambda task: _consume_task_exception(task, path))
 
 
 async def _write_owned(data: bytes) -> Path:
