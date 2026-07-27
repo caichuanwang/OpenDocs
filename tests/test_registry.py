@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import Any, cast
+
 from opendocs import ParseOptions, UnsupportedDocumentError
 from opendocs._models import DocumentType, ParsedDocument, TextBlock
 from opendocs.parsers.base import DocumentParser
@@ -18,6 +20,10 @@ class StubParser:
             document_type=DocumentType.TEXT,
             blocks=(TextBlock(text=source.path.name),),
         )
+
+
+class MissingParseParser:
+    pass
 
 
 def test_registry_returns_the_exact_registered_parser() -> None:
@@ -40,6 +46,28 @@ def test_registry_rejects_duplicate_registration() -> None:
         raise AssertionError("duplicate registration must fail")
 
 
+def test_registry_rejects_non_document_type_on_register() -> None:
+    registry = ParserRegistry()
+
+    try:
+        registry.register(cast(Any, "text"), StubParser())
+    except TypeError as error:
+        assert "DocumentType" in str(error)
+    else:
+        raise AssertionError("non-DocumentType registration must fail")
+
+
+def test_registry_rejects_non_parser_registration() -> None:
+    registry = ParserRegistry()
+
+    try:
+        registry.register(DocumentType.TEXT, cast(Any, MissingParseParser()))
+    except TypeError as error:
+        assert "DocumentParser" in str(error)
+    else:
+        raise AssertionError("non-parser registration must fail")
+
+
 def test_registry_raises_typed_error_for_unimplemented_format() -> None:
     registry = ParserRegistry()
 
@@ -51,6 +79,17 @@ def test_registry_raises_typed_error_for_unimplemented_format() -> None:
         raise AssertionError("missing parser must fail")
 
 
+def test_registry_rejects_non_document_type_on_get() -> None:
+    registry = ParserRegistry()
+
+    try:
+        registry.get(cast(Any, "text"))
+    except TypeError as error:
+        assert "DocumentType" in str(error)
+    else:
+        raise AssertionError("non-DocumentType lookup must fail")
+
+
 def test_stub_satisfies_parser_protocol() -> None:
     parser: DocumentParser = StubParser()
-    assert isinstance(parser, StubParser)
+    assert isinstance(parser, DocumentParser)
