@@ -216,3 +216,7 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# OpenDocs local tooling and corpus overrides
+.ty/
+tests/corpus.local.toml
