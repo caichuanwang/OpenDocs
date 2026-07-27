@@ -3,14 +3,19 @@
 OpenDocs is a Python SDK that converts caller-provided local documents into Markdown, and the M0
 foundation is complete with stable sync/async APIs plus TXT and Markdown support.
 
-## Install from this repository
+## Install from an existing checkout
+
+From a separate consuming project, point the dependency at a local OpenDocs checkout that contains
+`pyproject.toml`. The examples below assume your consumer project and the OpenDocs checkout are
+sibling directories, so `../OpenDocs` resolves to this checkout. These commands were verified
+against a local checkout flow; do not assume the current remote default branch is installable.
 
 ```bash
-uv add git+https://github.com/caichuanwang/OpenDocs.git
+uv add ../OpenDocs
 ```
 
 ```bash
-pip install git+https://github.com/caichuanwang/OpenDocs.git
+pip install ../OpenDocs
 ```
 
 ## Quick start
@@ -31,12 +36,12 @@ import asyncio
 from opendocs import aparse
 
 
-async def main() -> None:
+async def main() -> str:
     markdown = await aparse(b"plain text")
-    print(markdown)
+    return markdown
 
 
-asyncio.run(main())
+markdown = asyncio.run(main())
 ```
 
 Accepted inputs:

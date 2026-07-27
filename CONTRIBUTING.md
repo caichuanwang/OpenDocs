@@ -46,7 +46,7 @@ opendocs_wheel_check_python="$(
 )"
 "$opendocs_wheel_check_python" -m venv "$opendocs_wheel_check_dir/venv"
 opendocs_wheel_path="$(
-  python3 -c 'from pathlib import Path; wheels = sorted(Path("dist").glob("opendocs-*.whl"), key=lambda path: path.stat().st_mtime, reverse=True); print(wheels[0] if wheels else "")'
+  "$opendocs_wheel_check_python" -c 'from pathlib import Path; wheels = sorted(Path("dist").glob("opendocs-*.whl"), key=lambda path: path.stat().st_mtime, reverse=True); print(wheels[0] if wheels else "")'
 )"
 test -n "$opendocs_wheel_path" && test -f "$opendocs_wheel_path"
 "$opendocs_wheel_check_dir/venv/bin/pip" install "$opendocs_wheel_path"

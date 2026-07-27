@@ -2190,7 +2190,8 @@ git commit -m "Make private acceptance evidence reproducible without publishing 
 `README.md` must include:
 
 - one-sentence purpose and M0 status;
-- installation from the repository with `uv add` and `pip install` examples;
+- installation from an existing checkout for a separate consumer project with `uv add` and
+  `pip install` examples;
 - synchronous path example;
 - asynchronous bytes example;
 - explicit supported-input list;
@@ -2209,9 +2210,17 @@ markdown = parse("notes.md")
 ```
 
 ```python
+import asyncio
+
 from opendocs import aparse
 
-markdown = await aparse(b"plain text")
+
+async def main() -> str:
+    markdown = await aparse(b"plain text")
+    return markdown
+
+
+markdown = asyncio.run(main())
 ```
 
 - [ ] **Step 2: Write contribution and roadmap docs**
@@ -2277,13 +2286,27 @@ Run:
 
 ```bash
 uv build
-python3 -m venv /tmp/opendocs-m0-wheel-check
-/tmp/opendocs-m0-wheel-check/bin/pip install dist/opendocs-0.1.0-py3-none-any.whl
-/tmp/opendocs-m0-wheel-check/bin/python -c \
-  'from opendocs import parse; assert parse(b"hello") == "hello\n"'
+opendocs_wheel_check_dir="$(mktemp -d)"
+trap 'rm -rf "$opendocs_wheel_check_dir"' EXIT
+opendocs_wheel_check_python="$(
+  uv run --frozen python -c 'import sys; print(sys.executable)'
+)"
+"$opendocs_wheel_check_python" -m venv "$opendocs_wheel_check_dir/venv"
+opendocs_wheel_path="$(
+  "$opendocs_wheel_check_python" -c 'from pathlib import Path; wheels = sorted(Path("dist").glob("opendocs-*.whl"), key=lambda path: path.stat().st_mtime, reverse=True); print(wheels[0] if wheels else "")'
+)"
+test -n "$opendocs_wheel_path" && test -f "$opendocs_wheel_path"
+"$opendocs_wheel_check_dir/venv/bin/pip" install "$opendocs_wheel_path"
+"$opendocs_wheel_check_dir/venv/bin/python" -c 'import asyncio; from opendocs import ParseOptions, VisionConfig, aparse, parse; assert parse(b"hello") == "hello\n"; assert asyncio.run(aparse(b"hello")) == "hello\n"; ParseOptions(); VisionConfig(model="openai/vision-model")'
 ```
 
-Expected: wheel installation succeeds and the isolated smoke command exits `0`.
+Expected:
+
+- the newest built wheel resolves into `opendocs_wheel_path`;
+- installation succeeds in the task-scoped virtual environment;
+- `parse`, `aparse`, `ParseOptions`, and `VisionConfig` import from the installed wheel;
+- sync and async hello smoke assertions exit `0`;
+- the shell cleanup trap removes only the `mktemp -d` directory created for this verification.
 
 - [ ] **Step 5: Run the public quality gate, then the explicit local corpus addendum**
 
