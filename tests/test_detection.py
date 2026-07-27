@@ -21,9 +21,11 @@ def _resolved(path: Path, name: str | None = None) -> ResolvedSource:
     ("name", "content", "expected"),
     [
         ("notes.txt", b"hello", DocumentType.TEXT),
+        ("notes.md", b"# hello", DocumentType.MARKDOWN),
         ("NOTES.MARKDOWN", b"# hello", DocumentType.MARKDOWN),
         ("paper.pdf", b"%PDF-1.7\n", DocumentType.PDF),
         ("image.png", b"\x89PNG\r\n\x1a\n", DocumentType.IMAGE),
+        ("image.jpg", b"\xff\xd8\xff\xe0", DocumentType.IMAGE),
         ("IMAGE.JPEG", b"\xff\xd8\xff\xe0", DocumentType.IMAGE),
         ("image.webp", b"RIFF\x00\x00\x00\x00WEBP", DocumentType.IMAGE),
     ],
