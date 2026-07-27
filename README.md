@@ -1,5 +1,3 @@
 # OpenDocs
 
-OpenDocs converts local documents to Markdown.
-
-M0 foundation under implementation.
+OpenDocs converts local documents to Markdown. The M0 foundation is under implementation.
