@@ -38,12 +38,16 @@ def test_render_markdown_escapes_block_markers_without_changing_canonical_joinin
             TextBlock("   > quote\n"),
             TextBlock("- bullet\n"),
             TextBlock("2. ordered\n"),
+            TextBlock("10) next\n"),
         ),
     )
 
     result = render_markdown(document, max_output_chars=400_000)
 
-    assert result.markdown == "\\# heading\n\n   \\> quote\n\n\\- bullet\n\n\\2. ordered\n"
+    assert (
+        result.markdown
+        == "\\# heading\n\n   \\> quote\n\n\\- bullet\n\n2\\. ordered\n\n10\\) next\n"
+    )
     assert result.markdown.count("\\# heading") == 1
 
 
