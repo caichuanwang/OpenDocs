@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import codecs
 from pathlib import Path
 from zipfile import BadZipFile, ZipFile
 
@@ -24,6 +25,7 @@ _SUFFIX_TYPES = {
     ".pptx": DocumentType.PPTX,
 }
 _ZIP_PREFIXES = (b"PK\x03\x04", b"PK\x05\x06", b"PK\x07\x08")
+_UTF8_CHUNK_SIZE = 4096
 
 
 def _signature_type(signature: bytes) -> DocumentType | None:
@@ -41,20 +43,27 @@ def _signature_type(signature: bytes) -> DocumentType | None:
 def _container_type(path: Path) -> DocumentType:
     try:
         with ZipFile(path) as archive:
-            members = frozenset(archive.namelist())
+            found_pptx = False
+            for info in archive.infolist():
+                if info.filename == "word/document.xml":
+                    return DocumentType.DOCX
+                if info.filename == "ppt/presentation.xml":
+                    found_pptx = True
     except BadZipFile as error:
         raise CorruptDocumentError("ZIP-based document is corrupt") from error
 
-    if "word/document.xml" in members:
-        return DocumentType.DOCX
-    if "ppt/presentation.xml" in members:
+    if found_pptx:
         return DocumentType.PPTX
     raise UnsupportedDocumentError("ZIP container is neither DOCX nor PPTX")
 
 
 def _require_utf8(path: Path) -> None:
     try:
-        path.read_bytes().decode("utf-8")
+        decoder = codecs.getincrementaldecoder("utf-8")()
+        with path.open("rb") as handle:
+            while chunk := handle.read(_UTF8_CHUNK_SIZE):
+                decoder.decode(chunk)
+        decoder.decode(b"", final=True)
     except UnicodeDecodeError as error:
         raise CorruptDocumentError("text document is not valid UTF-8") from error
 
