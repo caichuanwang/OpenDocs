@@ -41,3 +41,12 @@ class ParserRegistry:
             raise UnsupportedDocumentError(
                 f"support for {document_type.value} is not installed in this release"
             ) from error
+
+
+def build_default_registry() -> ParserRegistry:
+    from opendocs.parsers.text import TextParser
+
+    registry = ParserRegistry()
+    registry.register(DocumentType.TEXT, TextParser(DocumentType.TEXT))
+    registry.register(DocumentType.MARKDOWN, TextParser(DocumentType.MARKDOWN))
+    return registry
