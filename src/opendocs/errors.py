@@ -3,6 +3,24 @@ from __future__ import annotations
 from enum import StrEnum
 
 
+def _require_string(name: str, value: object) -> str:
+    if not isinstance(value, str):
+        raise TypeError(f"{name} must be a str")
+    return value
+
+
+def _require_bool(name: str, value: object) -> bool:
+    if not isinstance(value, bool):
+        raise TypeError(f"{name} must be a bool")
+    return value
+
+
+def _require_error_code(value: object) -> OpenDocsErrorCode:
+    if not isinstance(value, OpenDocsErrorCode):
+        raise TypeError("code must be an OpenDocsErrorCode")
+    return value
+
+
 class OpenDocsErrorCode(StrEnum):
     INVALID_SOURCE = "invalid_source"
     UNSUPPORTED_DOCUMENT = "unsupported_document"
@@ -27,6 +45,9 @@ class OpenDocsError(Exception):
         code: OpenDocsErrorCode,
         retryable: bool = False,
     ) -> None:
+        _require_string("message", message)
+        _require_error_code(code)
+        _require_bool("retryable", retryable)
         super().__init__(message)
         self.code = code
         self.retryable = retryable
@@ -84,12 +105,14 @@ class NoUsableContentError(OpenDocsError):
 class SyncInAsyncContextError(OpenDocsError):
     def __init__(self) -> None:
         super().__init__(
-            "parse() active event loop use await aparse()",
+            "parse() cannot run inside an active event loop; use await aparse() instead",
             code=OpenDocsErrorCode.SYNC_IN_ASYNC_CONTEXT,
         )
 
 
 class OpenDocsWarning(UserWarning):
-    def __init__(self, code: str, message: str) -> None:
+    def __init__(self, message: str, *, code: str) -> None:
+        _require_string("message", message)
+        _require_string("code", code)
         super().__init__(message)
         self.code = code
