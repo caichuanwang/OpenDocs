@@ -1,0 +1,26 @@
+schema_version = 1
+
+[[files]]
+name = "Levabp.pptx"
+sha256 = "caf47c6f95243d3bb8b709db5ff21583d112b8591f233cd0e4ffc435f4e638d2"
+milestone = "M2"
+
+[[files]]
+name = "Tacore.aiBP.pdf"
+sha256 = "6a2523ef5a71069d542d1721bcaace4c04eb1d4b06d3425a97c151a92c40bfcc"
+milestone = "M1"
+
+[[files]]
+name = "明星肖像权授权合作协议.docx"
+sha256 = "0fe01f7f7f23a0ae9f4fc2e06c1ac58a6228258a7414d8db9bc322ac03110d34"
+milestone = "M2"
+
+[[files]]
+name = "外贸商业计划书_BP.pdf"
+sha256 = "c1c42e60865eceb20661b14615e0ca404e8532c4d92c362e01fc324d02ab54d5"
+milestone = "M1"
+
+[[files]]
+name = "a7097535a29f73941600af8d818a163a.png"
+sha256 = "1f74d2381f05a41478b9e246d4b31b932fa129a79696c41482a32dfbe6b88c71"
+milestone = "M1"

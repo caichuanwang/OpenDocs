@@ -2154,9 +2154,12 @@ corpus_dir = "/Users/caichuanwang/Downloads"
 
 Confirm it is ignored and is actually consumed by the explicit local option:
 
+Use the equals form for `@local`; with pytest 9, a standalone `@...` token is reserved for
+argument-file expansion before `conftest.py` is loaded.
+
 ```bash
 git check-ignore -v tests/corpus.local.toml
-uv run pytest tests/test_acceptance_corpus.py -q --corpus-dir @local
+uv run pytest tests/test_acceptance_corpus.py -q --corpus-dir=@local
 git status --short
 ```
 
@@ -2307,7 +2310,7 @@ Then run the local acceptance addendum. It is required for this implementation w
 not part of public CI:
 
 ```bash
-uv run --frozen pytest tests/test_acceptance_corpus.py -q --corpus-dir @local
+uv run --frozen pytest tests/test_acceptance_corpus.py -q --corpus-dir=@local
 ```
 
 Expected:
