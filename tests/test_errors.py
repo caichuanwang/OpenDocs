@@ -84,8 +84,7 @@ def test_sync_in_async_context_error_uses_stable_default_message() -> None:
 
     assert error.code is opendocs.OpenDocsErrorCode.SYNC_IN_ASYNC_CONTEXT
     assert (
-        str(error)
-        == "parse() cannot run inside an active event loop; use await aparse() instead"
+        str(error) == "parse() cannot run inside an active event loop; use await aparse() instead"
     )
     assert error.retryable is False
 
