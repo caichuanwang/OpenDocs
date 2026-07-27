@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import io
 import threading
+import warnings
 from pathlib import Path
 from typing import Any, cast
 from zipfile import ZIP_DEFLATED, ZipFile
@@ -10,6 +12,7 @@ from zipfile import ZIP_DEFLATED, ZipFile
 import pytest
 
 import opendocs
+import opendocs.source as source_module
 from opendocs import (
     DocumentTimeoutError,
     OpenDocsWarning,
@@ -22,6 +25,17 @@ from opendocs import (
 )
 from opendocs._models import DocumentType
 from opendocs.source import ResolvedSource
+
+
+async def _wait_for_open_docs_warning(
+    captured: list[warnings.WarningMessage],
+) -> OpenDocsWarning:
+    for _ in range(100):
+        for item in captured:
+            if isinstance(item.message, OpenDocsWarning):
+                return item.message
+        await asyncio.sleep(0.01)
+    raise AssertionError("expected OpenDocsWarning was not captured")
 
 
 def _office_bytes(member: str) -> bytes:
@@ -107,27 +121,72 @@ async def test_output_truncation_emits_a_capturable_warning() -> None:
     assert result == "alpha\n"
     assert isinstance(captured[0].message, OpenDocsWarning)
     assert captured[0].message.code == "output_truncated"
+    assert captured[0].filename == __file__
+
+
+def test_sync_output_truncation_warning_points_to_the_parse_caller() -> None:
+    with pytest.warns(OpenDocsWarning, match="block 2") as captured:
+        result = parse(
+            b"alpha\n\na much longer second block",
+            options=ParseOptions(max_output_chars=10),
+        )
+
+    assert result == "alpha\n"
+    assert isinstance(captured[0].message, OpenDocsWarning)
+    assert captured[0].message.code == "output_truncated"
+    assert captured[0].filename == __file__
 
 
 @pytest.mark.asyncio
-async def test_timeout_is_translated_and_temp_file_is_cleaned(
+async def test_timeout_during_detection_returns_promptly_when_source_cleanup_blocks(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    materialized_path: Path | None = None
+    entered = asyncio.Event()
+    cleanup_started = asyncio.Event()
+    cleanup_finished = asyncio.Event()
+    release_cleanup = asyncio.Event()
+    temporary_path: Path | None = None
+    cleanup_impl = source_module._cleanup_owned_path
+    real_unlink = Path.unlink
 
     async def slow_detect(source: ResolvedSource) -> DocumentType:
-        nonlocal materialized_path
-        materialized_path = source.path
-        await asyncio.sleep(1)
-        return DocumentType.TEXT
+        nonlocal temporary_path
+        temporary_path = source.path
+        entered.set()
+        await asyncio.Event().wait()
+        raise AssertionError("timeout should cancel detection")
+
+    async def blocked_cleanup(path: Path) -> None:
+        cleanup_started.set()
+        await release_cleanup.wait()
+        await cleanup_impl(path)
+        cleanup_finished.set()
+
+    def guarded_unlink(self: Path, *, missing_ok: bool = False) -> None:
+        for frame in inspect.stack():
+            if frame.function == "_cleanup_cancelled_owned_source":
+                raise AssertionError("api.py must not unlink owned temp files directly")
+        real_unlink(self, missing_ok=missing_ok)
 
     monkeypatch.setattr("opendocs.api._detect", slow_detect)
+    monkeypatch.setattr("opendocs.source._cleanup_owned_path", blocked_cleanup)
+    monkeypatch.setattr(Path, "unlink", guarded_unlink)
 
-    with pytest.raises(DocumentTimeoutError):
-        await aparse(b"hello", options=ParseOptions(timeout=0.01))
+    parse_task = asyncio.create_task(aparse(b"hello", options=ParseOptions(timeout=0.05)))
+    await entered.wait()
+    started_at = asyncio.get_running_loop().time()
 
-    assert materialized_path is not None
-    assert not materialized_path.exists()
+    try:
+        with pytest.raises(DocumentTimeoutError):
+            await asyncio.wait_for(parse_task, timeout=0.3)
+    finally:
+        release_cleanup.set()
+
+    assert asyncio.get_running_loop().time() - started_at < 0.3
+    assert temporary_path is not None
+    await asyncio.wait_for(cleanup_started.wait(), timeout=1)
+    await asyncio.wait_for(cleanup_finished.wait(), timeout=1)
+    assert not temporary_path.exists()
 
 
 @pytest.mark.asyncio
@@ -201,6 +260,40 @@ def test_parse_accepts_but_does_not_use_vision_in_m0() -> None:
 
 
 @pytest.mark.asyncio
+async def test_timeout_cleanup_failure_warns_without_replacing_document_timeout_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    entered = asyncio.Event()
+    temporary_path: Path | None = None
+
+    async def blocked_detect(source: ResolvedSource) -> DocumentType:
+        nonlocal temporary_path
+        temporary_path = source.path
+        entered.set()
+        await asyncio.Event().wait()
+        raise AssertionError("blocked detect should not resume")
+
+    async def fail_cleanup(path: Path) -> None:
+        raise PermissionError(f"cleanup blocked for {path.name}")
+
+    monkeypatch.setattr("opendocs.api._detect", blocked_detect)
+    monkeypatch.setattr(source_module, "_cleanup_owned_path", fail_cleanup)
+
+    with warnings.catch_warnings(record=True) as captured:
+        warnings.simplefilter("always", OpenDocsWarning)
+        with pytest.raises(DocumentTimeoutError):
+            await aparse(b"hello", options=ParseOptions(timeout=0.05))
+
+        warning = await _wait_for_open_docs_warning(captured)
+
+    assert temporary_path is not None
+    assert warning.code == "source_cleanup_failed"
+    assert str(temporary_path) in str(warning)
+    assert "cleanup blocked" in str(warning)
+    temporary_path.unlink(missing_ok=True)
+
+
+@pytest.mark.asyncio
 async def test_aparse_propagates_external_cancellation_and_cleans_temp(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -228,6 +321,44 @@ async def test_aparse_propagates_external_cancellation_and_cleans_temp(
             break
         await asyncio.sleep(0.01)
     assert not temporary_path.exists()
+
+
+@pytest.mark.asyncio
+async def test_aparse_propagates_external_cancellation_when_source_cleanup_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    entered = asyncio.Event()
+    temporary_path: Path | None = None
+
+    async def blocked_detect(source: ResolvedSource) -> DocumentType:
+        nonlocal temporary_path
+        temporary_path = source.path
+        entered.set()
+        await asyncio.Event().wait()
+        raise AssertionError("blocked detect should not resume")
+
+    async def fail_cleanup(path: Path) -> None:
+        raise PermissionError(f"cleanup blocked for {path.name}")
+
+    monkeypatch.setattr("opendocs.api._detect", blocked_detect)
+    monkeypatch.setattr(source_module, "_cleanup_owned_path", fail_cleanup)
+
+    with warnings.catch_warnings(record=True) as captured:
+        warnings.simplefilter("always", OpenDocsWarning)
+        task = asyncio.create_task(aparse(b"hello"))
+        await entered.wait()
+        task.cancel()
+
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+        warning = await _wait_for_open_docs_warning(captured)
+
+    assert temporary_path is not None
+    assert warning.code == "source_cleanup_failed"
+    assert str(temporary_path) in str(warning)
+    assert "cleanup blocked" in str(warning)
+    temporary_path.unlink(missing_ok=True)
 
 
 def test_public_all_exposes_only_the_documented_surface() -> None:

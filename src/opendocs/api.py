@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import warnings
 
-from opendocs._models import DocumentType
+from opendocs._models import DocumentType, RenderResult
 from opendocs.detection import detect_document_type
 from opendocs.errors import (
     DocumentTimeoutError,
@@ -37,9 +37,12 @@ async def _detect(source: ResolvedSource) -> DocumentType:
     return await asyncio.to_thread(detect_document_type, source)
 
 
-def _cleanup_cancelled_owned_source(source: ResolvedSource) -> None:
-    if source.owned:
-        source.path.unlink(missing_ok=True)
+def _emit_public_warnings(result: RenderResult) -> None:
+    for warning in result.warnings:
+        warnings.warn(
+            OpenDocsWarning(warning.message, code=warning.code),
+            stacklevel=3,
+        )
 
 
 async def _parse_with_timeout(
@@ -47,28 +50,17 @@ async def _parse_with_timeout(
     *,
     options: ParseOptions,
     vision: VisionConfig | None,
-) -> str:
+) -> RenderResult:
     del vision
     async with asyncio.timeout(options.timeout):
         async with materialize_source(source) as resolved:
-            try:
-                document_type = await _detect(resolved)
-                parser = build_default_registry().get(document_type)
-                document = await parser.parse(resolved, options=options)
-                result = render_markdown(
-                    document,
-                    max_output_chars=options.max_output_chars,
-                )
-            except asyncio.CancelledError:
-                _cleanup_cancelled_owned_source(resolved)
-                raise
-
-    for warning in result.warnings:
-        warnings.warn(
-            OpenDocsWarning(warning.message, code=warning.code),
-            stacklevel=3,
-        )
-    return result.markdown
+            document_type = await _detect(resolved)
+            parser = build_default_registry().get(document_type)
+            document = await parser.parse(resolved, options=options)
+            return render_markdown(
+                document,
+                max_output_chars=options.max_output_chars,
+            )
 
 
 async def aparse(
@@ -80,7 +72,7 @@ async def aparse(
     resolved_options = _resolve_options(options)
     resolved_vision = _resolve_vision(vision)
     try:
-        return await _parse_with_timeout(
+        result = await _parse_with_timeout(
             source,
             options=resolved_options,
             vision=resolved_vision,
@@ -93,6 +85,8 @@ async def aparse(
         ) from error
     except OpenDocsError:
         raise
+    _emit_public_warnings(result)
+    return result.markdown
 
 
 def parse(
@@ -106,5 +100,22 @@ def parse(
     try:
         asyncio.get_running_loop()
     except RuntimeError:
-        return asyncio.run(aparse(source, options=resolved_options, vision=resolved_vision))
+        try:
+            result = asyncio.run(
+                _parse_with_timeout(
+                    source,
+                    options=resolved_options,
+                    vision=resolved_vision,
+                )
+            )
+        except TimeoutError as error:
+            if not isinstance(error.__cause__, asyncio.CancelledError):
+                raise
+            raise DocumentTimeoutError(
+                f"document parsing exceeded {resolved_options.timeout} seconds"
+            ) from error
+        except OpenDocsError:
+            raise
+        _emit_public_warnings(result)
+        return result.markdown
     raise SyncInAsyncContextError()
