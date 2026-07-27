@@ -216,3 +216,12 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+.venv/
+.pytest_cache/
+.ruff_cache/
+.ty/
+__pycache__/
+*.py[cod]
+build/
+dist/
+tests/corpus.local.toml
