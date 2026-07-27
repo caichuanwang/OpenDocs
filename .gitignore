@@ -216,12 +216,7 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
-.venv/
-.pytest_cache/
-.ruff_cache/
+
+# OpenDocs local tooling and corpus overrides
 .ty/
-__pycache__/
-*.py[cod]
-build/
-dist/
 tests/corpus.local.toml
