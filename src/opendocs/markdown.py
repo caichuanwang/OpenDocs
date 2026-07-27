@@ -6,23 +6,12 @@ from opendocs._models import MarkdownBlock, ParsedDocument, RenderResult, TextBl
 from opendocs.errors import LimitExceededError, NoUsableContentError
 
 _INLINE_MARKDOWN = re.compile(r"([\\`*_\[\]<>])")
-_BLOCK_MARKDOWN = re.compile(r"(?m)^([ \t]{0,3})([#>]|[-+]|(\d+)([.)]))(?=\s)")
+_BLOCK_MARKDOWN = re.compile(r"(?m)^([ \t]{0,3})([#>]|[-+]\s|\d+[.)]\s)")
 
 
 def _escape_plain_text(value: str) -> str:
     escaped = _INLINE_MARKDOWN.sub(r"\\\1", value)
-    return _BLOCK_MARKDOWN.sub(_escape_block_marker, escaped)
-
-
-def _escape_block_marker(match: re.Match[str]) -> str:
-    indent = match.group(1)
-    marker = match.group(2)
-    ordered_prefix = match.group(3)
-    ordered_delimiter = match.group(4)
-
-    if ordered_prefix is not None and ordered_delimiter is not None:
-        return f"{indent}{ordered_prefix}\\{ordered_delimiter}"
-    return f"{indent}\\{marker}"
+    return _BLOCK_MARKDOWN.sub(lambda match: f"{match.group(1)}\\{match.group(2)}", escaped)
 
 
 def _render_block(block: TextBlock | MarkdownBlock) -> str:
@@ -31,7 +20,7 @@ def _render_block(block: TextBlock | MarkdownBlock) -> str:
     return _escape_plain_text(block.text.rstrip("\n"))
 
 
-def render_markdown(document: ParsedDocument, *, max_output_chars: int = 400_000) -> RenderResult:
+def render_markdown(document: ParsedDocument, *, max_output_chars: int) -> RenderResult:
     rendered: list[str] = []
     warnings = list(document.warnings)
 
