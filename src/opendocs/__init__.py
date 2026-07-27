@@ -1,4 +1,5 @@
-from .errors import (
+from opendocs.api import aparse, parse
+from opendocs.errors import (
     CorruptDocumentError,
     DocumentTimeoutError,
     DocumentTypeMismatchError,
@@ -12,7 +13,7 @@ from .errors import (
     UnsupportedDocumentError,
     VisionRequiredError,
 )
-from .options import ParseOptions, VisionConfig
+from opendocs.options import ParseOptions, VisionConfig
 
 __version__ = "0.1.0"
 
@@ -32,4 +33,6 @@ __all__ = [
     "VisionConfig",
     "VisionRequiredError",
     "__version__",
+    "aparse",
+    "parse",
 ]
