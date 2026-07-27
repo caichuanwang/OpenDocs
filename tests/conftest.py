@@ -24,12 +24,15 @@ def _resolve_local_corpus_dir(local_manifest: Path | None = None) -> str:
     if not local_manifest.is_file():
         raise pytest.UsageError(f"local corpus manifest not found: {local_manifest}")
 
-    with local_manifest.open("rb") as handle:
-        payload = tomllib.load(handle)
+    try:
+        with local_manifest.open("rb") as handle:
+            payload = tomllib.load(handle)
+    except tomllib.TOMLDecodeError as exc:
+        raise pytest.UsageError(f"malformed TOML in {local_manifest}: {exc}") from exc
 
     value = payload.get("corpus_dir")
-    if not isinstance(value, str) or not value:
-        raise pytest.UsageError("corpus.local.toml must define a non-empty corpus_dir")
+    if not isinstance(value, str) or not value.strip():
+        raise pytest.UsageError(f"{local_manifest} must define a non-empty corpus_dir")
 
     return value
 
