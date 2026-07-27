@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import inspect
+
 from opendocs._models import DocumentType
 from opendocs.errors import UnsupportedDocumentError
 from opendocs.parsers.base import DocumentParser
@@ -14,6 +16,9 @@ def _require_document_type(value: object) -> DocumentType:
 def _require_document_parser(value: object) -> DocumentParser:
     if not isinstance(value, DocumentParser):
         raise TypeError("parser must conform to DocumentParser")
+    parse = value.parse
+    if not callable(parse) or not inspect.iscoroutinefunction(parse):
+        raise TypeError("parser must provide an async parse method")
     return value
 
 

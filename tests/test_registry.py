@@ -26,6 +26,23 @@ class MissingParseParser:
     pass
 
 
+class NonCallableParseParser:
+    parse = 123
+
+
+class SyncParseParser:
+    def parse(
+        self,
+        source: ResolvedSource,
+        *,
+        options: ParseOptions,
+    ) -> ParsedDocument:
+        return ParsedDocument(
+            document_type=DocumentType.TEXT,
+            blocks=(TextBlock(text=source.path.name),),
+        )
+
+
 def test_registry_returns_the_exact_registered_parser() -> None:
     parser = StubParser()
     registry = ParserRegistry()
@@ -66,6 +83,28 @@ def test_registry_rejects_non_parser_registration() -> None:
         assert "DocumentParser" in str(error)
     else:
         raise AssertionError("non-parser registration must fail")
+
+
+def test_registry_rejects_non_callable_parse_registration() -> None:
+    registry = ParserRegistry()
+
+    try:
+        registry.register(DocumentType.TEXT, cast(Any, NonCallableParseParser()))
+    except TypeError as error:
+        assert "async" in str(error)
+    else:
+        raise AssertionError("non-callable parse registration must fail")
+
+
+def test_registry_rejects_sync_parse_registration() -> None:
+    registry = ParserRegistry()
+
+    try:
+        registry.register(DocumentType.TEXT, cast(Any, SyncParseParser()))
+    except TypeError as error:
+        assert "async" in str(error)
+    else:
+        raise AssertionError("sync parse registration must fail")
 
 
 def test_registry_raises_typed_error_for_unimplemented_format() -> None:
