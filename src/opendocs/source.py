@@ -58,6 +58,13 @@ def _validated_path(source: str | os.PathLike[str]) -> Path:
     return path.resolve()
 
 
+def _original_path_name(source: str | os.PathLike[str]) -> str:
+    value = os.fspath(source)
+    if isinstance(value, bytes):
+        raise InvalidSourceError("byte paths are not supported; pass file bytes instead")
+    return Path(value).expanduser().name
+
+
 def _is_path_source(source: Source) -> TypeGuard[str | os.PathLike[str]]:
     return not isinstance(source, bytes) and isinstance(source, (str, os.PathLike))
 
@@ -102,11 +109,25 @@ def _write_temporary(path: Path, data: bytes) -> None:
 def _cleanup_finished_write(task: asyncio.Task[None], path: Path) -> None:
     if not task.cancelled():
         task.exception()
-    path.unlink(missing_ok=True)
+    _schedule_background_cleanup(path)
 
 
 async def _unlink_if_exists(path: Path) -> None:
     await asyncio.to_thread(path.unlink, missing_ok=True)
+
+
+async def _cleanup_owned_path(path: Path) -> None:
+    await _unlink_if_exists(path)
+
+
+def _consume_task_exception(task: asyncio.Task[object]) -> None:
+    if not task.cancelled():
+        task.exception()
+
+
+def _schedule_background_cleanup(path: Path) -> None:
+    cleanup_task = asyncio.create_task(_cleanup_owned_path(path))
+    cleanup_task.add_done_callback(_consume_task_exception)
 
 
 async def _write_owned(data: bytes) -> Path:
@@ -129,8 +150,9 @@ async def materialize_source(source: Source) -> AsyncIterator[ResolvedSource]:
         data = source
         original_name = None
     elif _is_path_source(source):
+        original_name = _original_path_name(source)
         path = await asyncio.to_thread(_validated_path, source)
-        yield ResolvedSource(path=path, original_name=path.name, owned=False)
+        yield ResolvedSource(path=path, original_name=original_name, owned=False)
         return
     elif _is_binary_stream(source):
         data = await asyncio.to_thread(_read_stream, source)
@@ -142,5 +164,20 @@ async def materialize_source(source: Source) -> AsyncIterator[ResolvedSource]:
     path = await _write_owned(data)
     try:
         yield ResolvedSource(path=path, original_name=original_name, owned=True)
-    finally:
-        await _unlink_if_exists(path)
+    except asyncio.CancelledError:
+        _schedule_background_cleanup(path)
+        raise
+    except BaseException as error:
+        try:
+            await _cleanup_owned_path(path)
+        except asyncio.CancelledError:
+            _schedule_background_cleanup(path)
+        except BaseException as cleanup_error:
+            error.add_note(f"Owned source cleanup failed for {path}: {cleanup_error}")
+        raise
+    else:
+        try:
+            await _cleanup_owned_path(path)
+        except asyncio.CancelledError:
+            _schedule_background_cleanup(path)
+            raise

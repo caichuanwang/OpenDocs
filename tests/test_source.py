@@ -8,6 +8,7 @@ from typing import Any, cast
 
 import pytest
 
+import opendocs.source as source_module
 from opendocs import InvalidSourceError, LimitExceededError
 from opendocs.source import materialize_source
 
@@ -25,6 +26,22 @@ async def test_path_stays_caller_owned(tmp_path: Path) -> None:
         assert resolved.owned is False
 
     assert path.exists()
+
+
+@pytest.mark.asyncio
+async def test_symlink_path_preserves_caller_visible_basename(tmp_path: Path) -> None:
+    target = tmp_path / "real.txt"
+    target.write_text("hello", encoding="utf-8")
+    alias = tmp_path / "alias.md"
+    alias.symlink_to(target)
+
+    async with materialize_source(alias) as resolved:
+        assert resolved.path == target.resolve()
+        assert resolved.original_name == "alias.md"
+        assert resolved.owned is False
+
+    assert alias.exists()
+    assert target.exists()
 
 
 @pytest.mark.asyncio
@@ -49,6 +66,28 @@ async def test_owned_file_is_removed_after_failure() -> None:
 
     assert temporary_path is not None
     assert not temporary_path.exists()
+
+
+@pytest.mark.asyncio
+async def test_cleanup_failure_preserves_primary_exception(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    temporary_path: Path | None = None
+
+    async def fail_cleanup(path: Path) -> None:
+        raise PermissionError(f"cleanup blocked for {path.name}")
+
+    monkeypatch.setattr(source_module, "_cleanup_owned_path", fail_cleanup)
+
+    with pytest.raises(RuntimeError, match="parser failed") as exc_info:
+        async with materialize_source(b"hello") as resolved:
+            temporary_path = resolved.path
+            raise RuntimeError("parser failed")
+
+    assert temporary_path is not None
+    assert temporary_path.exists()
+    notes = getattr(exc_info.value, "__notes__", [])
+    assert any("cleanup blocked" in note for note in notes)
 
 
 @pytest.mark.asyncio
@@ -162,6 +201,52 @@ async def test_owned_file_is_removed_after_cancellation() -> None:
         await task
 
     assert temporary_path is not None
+    for _ in range(100):
+        if not temporary_path.exists():
+            break
+        await asyncio.sleep(0.01)
+    assert not temporary_path.exists()
+
+
+@pytest.mark.asyncio
+async def test_post_yield_cancellation_returns_promptly_and_cleans_eventually(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    entered = asyncio.Event()
+    cleanup_started = asyncio.Event()
+    cleanup_finished = asyncio.Event()
+    release_cleanup = asyncio.Event()
+    temporary_path: Path | None = None
+
+    cleanup_impl = source_module._cleanup_owned_path
+
+    async def blocked_cleanup(path: Path) -> None:
+        cleanup_started.set()
+        await release_cleanup.wait()
+        await cleanup_impl(path)
+        cleanup_finished.set()
+
+    monkeypatch.setattr(source_module, "_cleanup_owned_path", blocked_cleanup)
+
+    async def hold_source() -> None:
+        nonlocal temporary_path
+        async with materialize_source(b"hello") as resolved:
+            temporary_path = resolved.path
+            entered.set()
+            await asyncio.Event().wait()
+
+    task = asyncio.create_task(hold_source())
+    await entered.wait()
+    task.cancel()
+
+    try:
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(task, timeout=0.2)
+    finally:
+        release_cleanup.set()
+
+    assert temporary_path is not None
+    await asyncio.wait_for(cleanup_finished.wait(), timeout=1)
     assert not temporary_path.exists()
 
 
