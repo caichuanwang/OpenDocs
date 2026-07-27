@@ -959,9 +959,7 @@ async def materialize_source(source: Source) -> AsyncIterator[ResolvedSource]:
         stream_name = getattr(source, "name", None)
         original_name = Path(stream_name).name if isinstance(stream_name, str) else None
     else:
-        raise InvalidSourceError(
-            "source must be a local path, bytes, or a binary file object"
-        )
+        raise InvalidSourceError("source must be a local path, bytes, or a binary file object")
 
     path = await _write_owned(data)
     try:
@@ -1260,9 +1258,7 @@ def _require_utf8(path: Path) -> None:
 
 def _mismatch(suffix: str, detected: DocumentType | None) -> DocumentTypeMismatchError:
     actual = detected.value if detected is not None else "unknown content"
-    return DocumentTypeMismatchError(
-        f"declared extension {suffix} is incompatible with {actual}"
-    )
+    return DocumentTypeMismatchError(f"declared extension {suffix} is incompatible with {actual}")
 
 
 def detect_document_type(source: ResolvedSource) -> DocumentType:
@@ -1544,7 +1540,9 @@ async def test_markdown_parser_preserves_source_markdown(tmp_path: Path) -> None
 
 
 @pytest.mark.asyncio
-async def test_text_parser_splits_paragraphs_without_markdown_interpretation(tmp_path: Path) -> None:
+async def test_text_parser_splits_paragraphs_without_markdown_interpretation(
+    tmp_path: Path,
+) -> None:
     path = tmp_path / "notes.txt"
     path.write_bytes(b"first\r\n\r\n*literal*\r\n")
     parser = build_default_registry().get(DocumentType.TEXT)
@@ -1819,9 +1817,7 @@ async def test_timeout_during_temp_write_returns_promptly_and_cleans_eventually(
         path.write_bytes(data)
 
     monkeypatch.setattr("opendocs.source._write_temporary", delayed_write)
-    parse_task = asyncio.create_task(
-        aparse(b"hello", options=ParseOptions(timeout=0.05))
-    )
+    parse_task = asyncio.create_task(aparse(b"hello", options=ParseOptions(timeout=0.05)))
     assert await asyncio.to_thread(started.wait, 1), "background write did not start"
     started_at = asyncio.get_running_loop().time()
 

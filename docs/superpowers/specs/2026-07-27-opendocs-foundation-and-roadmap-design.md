@@ -111,12 +111,14 @@ The public signatures accept:
 ```python
 Source = str | os.PathLike[str] | bytes | BinaryIO
 
+
 def parse(
     source: Source,
     *,
     options: ParseOptions | None = None,
     vision: VisionConfig | None = None,
 ) -> str: ...
+
 
 async def aparse(
     source: Source,
