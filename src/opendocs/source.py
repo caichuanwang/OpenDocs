@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import os
 import tempfile
+import warnings
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
@@ -10,11 +11,12 @@ from pathlib import Path
 from typing import BinaryIO, TypeAlias, TypeGuard
 from urllib.parse import urlparse
 
-from opendocs.errors import InvalidSourceError, LimitExceededError
+from opendocs.errors import InvalidSourceError, LimitExceededError, OpenDocsWarning
 
 Source: TypeAlias = str | os.PathLike[str] | bytes | BinaryIO
 _MAX_INPUT_BYTES = 100_000_000
 _REMOTE_SCHEMES = frozenset({"http", "https", "s3", "oss"})
+_SOURCE_CLEANUP_FAILED_WARNING_CODE = "source_cleanup_failed"
 
 
 @dataclass(frozen=True, slots=True)
@@ -120,13 +122,31 @@ async def _cleanup_owned_path(path: Path) -> None:
     await _unlink_if_exists(path)
 
 
+def _warn_cleanup_failure(path: Path, error: BaseException) -> None:
+    warnings.warn(
+        OpenDocsWarning(
+            f"Owned source cleanup failed for {path}: {error}",
+            code=_SOURCE_CLEANUP_FAILED_WARNING_CODE,
+        ),
+        stacklevel=2,
+    )
+
+
 def _consume_task_exception(task: asyncio.Task[object]) -> None:
     if not task.cancelled():
-        task.exception()
+        exception = task.exception()
+        if exception is not None:
+            task_name = task.get_name()
+            if task_name.startswith("cleanup-owned-source:"):
+                path = Path(task_name.removeprefix("cleanup-owned-source:"))
+                _warn_cleanup_failure(path, exception)
 
 
 def _schedule_background_cleanup(path: Path) -> None:
-    cleanup_task = asyncio.create_task(_cleanup_owned_path(path))
+    cleanup_task = asyncio.create_task(
+        _cleanup_owned_path(path),
+        name=f"cleanup-owned-source:{path}",
+    )
     cleanup_task.add_done_callback(_consume_task_exception)
 
 
