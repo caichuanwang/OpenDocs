@@ -39,15 +39,26 @@ Expected public result:
 After `uv build`, verify the built wheel in a fresh task-scoped virtual environment:
 
 ```bash
-tmpdir="$(mktemp -d)"
-python3 -m venv "$tmpdir/opendocs-m0-wheel-check"
-"$tmpdir/opendocs-m0-wheel-check/bin/pip" install dist/opendocs-0.1.0-py3-none-any.whl
-"$tmpdir/opendocs-m0-wheel-check/bin/python" -c 'import asyncio; from opendocs import ParseOptions, VisionConfig, aparse, parse; assert parse(b"hello") == "hello\n"; assert asyncio.run(aparse(b"hello")) == "hello\n"; ParseOptions(); VisionConfig(model="openai/vision-model")'
+opendocs_wheel_check_dir="$(mktemp -d)"
+trap 'rm -rf "$opendocs_wheel_check_dir"' EXIT
+opendocs_wheel_check_python="$(
+  uv run --frozen python -c 'import sys; print(sys.executable)'
+)"
+"$opendocs_wheel_check_python" -m venv "$opendocs_wheel_check_dir/venv"
+opendocs_wheel_path="$(
+  python3 -c 'from pathlib import Path; wheels = sorted(Path("dist").glob("opendocs-*.whl"), key=lambda path: path.stat().st_mtime, reverse=True); print(wheels[0] if wheels else "")'
+)"
+test -n "$opendocs_wheel_path" && test -f "$opendocs_wheel_path"
+"$opendocs_wheel_check_dir/venv/bin/pip" install "$opendocs_wheel_path"
+"$opendocs_wheel_check_dir/venv/bin/python" -c 'import asyncio; from opendocs import ParseOptions, VisionConfig, aparse, parse; assert parse(b"hello") == "hello\n"; assert asyncio.run(aparse(b"hello")) == "hello\n"; ParseOptions(); VisionConfig(model="openai/vision-model")'
 ```
 
 Expected result:
 
-- wheel installation succeeds from `dist/opendocs-0.1.0-py3-none-any.whl`
+- `opendocs_wheel_check_python` resolves to a Python 3.11+ interpreter from the synced project
+  environment
+- the newest built `dist/opendocs-*.whl` resolves into `opendocs_wheel_path`
+- the shell cleanup trap removes only the `mktemp -d` directory created for this verification
 - `parse`, `aparse`, `ParseOptions`, and `VisionConfig` import from the installed wheel
 - sync and async hello smoke assertions both exit `0`
 

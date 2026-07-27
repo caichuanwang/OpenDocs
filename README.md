@@ -26,9 +26,17 @@ markdown = parse("notes.md")
 Asynchronous bytes example:
 
 ```python
+import asyncio
+
 from opendocs import aparse
 
-markdown = await aparse(b"plain text")
+
+async def main() -> None:
+    markdown = await aparse(b"plain text")
+    print(markdown)
+
+
+asyncio.run(main())
 ```
 
 Accepted inputs:
@@ -52,7 +60,7 @@ call in M0.
 | Format | Status in M0 | Notes |
 | --- | --- | --- |
 | TXT | Available | Parsed end to end into deterministic Markdown |
-| Markdown (`.md`, `.markdown`) | Available | Preserved as Markdown with normalized trailing newline |
+| Markdown (`.md`, `.markdown`) | Available | Preserved as Markdown only for `.md`/`.markdown` local paths or named binary streams; unnamed UTF-8 bytes/streams intentionally detect as TXT |
 | PDF | Planned for M1 | Detected now, raises a typed unsupported-format error in M0 |
 | PNG / JPEG / WebP | Planned for M1 | Caller still provides local files; vision path lands in M1 |
 | DOCX | Planned for M2 | Detected now, raises a typed unsupported-format error in M0 |

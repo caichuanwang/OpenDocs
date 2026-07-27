@@ -10,11 +10,13 @@ architecture algorithms from that design.
 Summary:
 - package the SDK for Python 3.11+
 - ship `parse()` and `aparse()` with stable options, errors, detection, registry, and rendering
-- support TXT and Markdown from local paths, bytes, and binary streams
+- support TXT from all accepted inputs, and preserve Markdown for `.md`/`.markdown` local paths or
+  named binary streams while unnamed UTF-8 bytes/streams intentionally detect as TXT
 - add tests, Ruff, ty, wheel checks, corpus manifest support, README, CONTRIBUTING, and CI
 
 Exit criteria:
-- a clean install parses TXT and Markdown from path, `str`, `bytes`, and `BinaryIO`
+- a clean install parses TXT from every accepted input shape and preserves Markdown for
+  `.md`/`.markdown` local paths or named binary streams
 - sync and async calls produce identical Markdown for equivalent inputs
 - static checks, tests, and wheel build pass
 
