@@ -5,7 +5,7 @@ import os
 import tempfile
 import warnings
 from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from dataclasses import dataclass
 from pathlib import Path
 from typing import BinaryIO, TypeAlias, TypeGuard
@@ -144,13 +144,29 @@ def _schedule_background_cleanup(path: Path) -> None:
     cleanup_task.add_done_callback(lambda task: _consume_task_exception(task, path))
 
 
-async def _write_owned(data: bytes) -> Path:
+async def _cleanup_after_cancellation(path: Path, *, wait: bool) -> None:
+    if not wait:
+        _schedule_background_cleanup(path)
+        return
+
+    try:
+        await _cleanup_owned_path(path)
+    except BaseException as error:
+        _warn_cleanup_failure(path, error)
+
+
+async def _write_owned(data: bytes, *, wait_for_cleanup_on_cancel: bool) -> Path:
     path = _create_temporary_path(data)
     write_task = asyncio.create_task(asyncio.to_thread(_write_temporary, path, data))
     try:
         await asyncio.shield(write_task)
     except asyncio.CancelledError:
-        write_task.add_done_callback(lambda completed: _cleanup_finished_write(completed, path))
+        if wait_for_cleanup_on_cancel:
+            with suppress(BaseException):
+                await write_task
+            await _cleanup_after_cancellation(path, wait=True)
+        else:
+            write_task.add_done_callback(lambda completed: _cleanup_finished_write(completed, path))
         raise
     except BaseException:
         await _unlink_if_exists(path)
@@ -159,7 +175,11 @@ async def _write_owned(data: bytes) -> Path:
 
 
 @asynccontextmanager
-async def materialize_source(source: Source) -> AsyncIterator[ResolvedSource]:
+async def materialize_source(
+    source: Source,
+    *,
+    wait_for_cleanup_on_cancel: bool = False,
+) -> AsyncIterator[ResolvedSource]:
     if isinstance(source, bytes):
         data = source
         original_name = None
@@ -175,17 +195,26 @@ async def materialize_source(source: Source) -> AsyncIterator[ResolvedSource]:
     else:
         raise InvalidSourceError("source must be a local path, bytes, or a binary file object")
 
-    path = await _write_owned(data)
+    path = await _write_owned(
+        data,
+        wait_for_cleanup_on_cancel=wait_for_cleanup_on_cancel,
+    )
     try:
         yield ResolvedSource(path=path, original_name=original_name, owned=True)
     except asyncio.CancelledError:
-        _schedule_background_cleanup(path)
+        await _cleanup_after_cancellation(
+            path,
+            wait=wait_for_cleanup_on_cancel,
+        )
         raise
     except BaseException as error:
         try:
             await _cleanup_owned_path(path)
         except asyncio.CancelledError:
-            _schedule_background_cleanup(path)
+            await _cleanup_after_cancellation(
+                path,
+                wait=wait_for_cleanup_on_cancel,
+            )
         except BaseException as cleanup_error:
             error.add_note(f"Owned source cleanup failed for {path}: {cleanup_error}")
         raise
@@ -193,5 +222,8 @@ async def materialize_source(source: Source) -> AsyncIterator[ResolvedSource]:
         try:
             await _cleanup_owned_path(path)
         except asyncio.CancelledError:
-            _schedule_background_cleanup(path)
+            await _cleanup_after_cancellation(
+                path,
+                wait=wait_for_cleanup_on_cancel,
+            )
             raise

@@ -4,6 +4,7 @@ import asyncio
 import inspect
 import io
 import threading
+import time
 import warnings
 from pathlib import Path
 from typing import Any, cast
@@ -222,6 +223,89 @@ async def test_timeout_during_temp_write_returns_promptly_and_cleans_eventually(
             break
         await asyncio.sleep(0.01)
     assert not temporary_path.exists()
+
+
+def test_sync_timeout_during_detection_cleans_temp_before_return(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    temporary_path: Path | None = None
+    cleanup_impl = source_module._cleanup_owned_path
+
+    async def blocked_detect(source: ResolvedSource) -> DocumentType:
+        nonlocal temporary_path
+        temporary_path = source.path
+        await asyncio.Event().wait()
+        raise AssertionError("timeout should cancel detection")
+
+    async def delayed_cleanup(path: Path) -> None:
+        await asyncio.sleep(0.1)
+        await cleanup_impl(path)
+
+    monkeypatch.setattr("opendocs.api._detect", blocked_detect)
+    monkeypatch.setattr(source_module, "_cleanup_owned_path", delayed_cleanup)
+
+    try:
+        with pytest.raises(DocumentTimeoutError):
+            parse(b"hello", options=ParseOptions(timeout=0.01))
+
+        assert temporary_path is not None
+        assert not temporary_path.exists()
+    finally:
+        if temporary_path is not None:
+            temporary_path.unlink(missing_ok=True)
+
+
+def test_sync_timeout_during_temp_write_cleans_temp_before_return(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    temporary_path: Path | None = None
+
+    def delayed_write(path: Path, data: bytes) -> None:
+        nonlocal temporary_path
+        temporary_path = path
+        time.sleep(0.1)
+        path.write_bytes(data)
+
+    monkeypatch.setattr(source_module, "_write_temporary", delayed_write)
+
+    try:
+        with pytest.raises(DocumentTimeoutError):
+            parse(b"hello", options=ParseOptions(timeout=0.01))
+
+        assert temporary_path is not None
+        assert not temporary_path.exists()
+    finally:
+        if temporary_path is not None:
+            temporary_path.unlink(missing_ok=True)
+
+
+def test_sync_failure_with_cancelled_cleanup_cleans_temp_before_return(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    temporary_path: Path | None = None
+    cleanup_impl = source_module._cleanup_owned_path
+
+    async def failed_detect(source: ResolvedSource) -> DocumentType:
+        nonlocal temporary_path
+        temporary_path = source.path
+        raise RuntimeError("detection failed")
+
+    async def delayed_cleanup(path: Path) -> None:
+        await asyncio.sleep(0.1)
+        await cleanup_impl(path)
+
+    monkeypatch.setattr("opendocs.api._detect", failed_detect)
+    monkeypatch.setattr(source_module, "_cleanup_owned_path", delayed_cleanup)
+
+    try:
+        with pytest.raises(RuntimeError, match="detection failed"):
+            parse(b"hello", options=ParseOptions(timeout=0.01))
+
+        assert temporary_path is not None
+        assert not temporary_path.exists()
+    finally:
+        if temporary_path is not None:
+            temporary_path.unlink(missing_ok=True)
 
 
 @pytest.mark.parametrize(

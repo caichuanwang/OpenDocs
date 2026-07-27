@@ -50,10 +50,14 @@ async def _parse_with_timeout(
     *,
     options: ParseOptions,
     vision: VisionConfig | None,
+    wait_for_cleanup_on_cancel: bool = False,
 ) -> RenderResult:
     del vision
     async with asyncio.timeout(options.timeout):
-        async with materialize_source(source) as resolved:
+        async with materialize_source(
+            source,
+            wait_for_cleanup_on_cancel=wait_for_cleanup_on_cancel,
+        ) as resolved:
             document_type = await _detect(resolved)
             parser = build_default_registry().get(document_type)
             document = await parser.parse(resolved, options=options)
@@ -106,6 +110,7 @@ def parse(
                     source,
                     options=resolved_options,
                     vision=resolved_vision,
+                    wait_for_cleanup_on_cancel=True,
                 )
             )
         except TimeoutError as error:
