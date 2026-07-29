@@ -11,7 +11,7 @@ import pytest
 
 import opendocs.source as source_module
 from opendocs import InvalidSourceError, LimitExceededError, OpenDocsWarning
-from opendocs.source import materialize_source
+from opendocs.source import ParseWorkspace, materialize_source, parse_workspace
 
 MAX_INPUT_BYTES = 100_000_000
 
@@ -25,6 +25,137 @@ async def _wait_for_open_docs_warning(
                 return item.message
         await asyncio.sleep(0.01)
     raise AssertionError("expected OpenDocsWarning was not captured")
+
+
+def test_parse_workspace_validates_output_names(tmp_path: Path) -> None:
+    workspace = ParseWorkspace(tmp_path)
+
+    assert workspace.output_path("page-1.png") == tmp_path / "page-1.png"
+    for value in (
+        "",
+        "../escape",
+        "nested/file",
+        "nested\\file",
+        "/absolute",
+        "page.png:secret",
+        "CON",
+        "CONIN$",
+        "conin$.txt",
+        "CONOUT$",
+        "conout$.png",
+        "nul.txt",
+        "LPT1.pdf",
+        "con .txt",
+        "COM¹.log",
+        "bad<name.png",
+        "bad>name.png",
+        'bad"name.png',
+        "bad|name.png",
+        "bad?name.png",
+        "bad*name.png",
+        "trailing-space.png ",
+        "trailing-dot.png.",
+        "control\x00.png",
+        "control\x1f.png",
+        "control\x7f.png",
+    ):
+        with pytest.raises(ValueError, match="output name"):
+            workspace.output_path(value)
+
+
+@pytest.mark.asyncio
+async def test_parse_workspace_is_source_owned_and_removed() -> None:
+    workspace_path: Path | None = None
+    async with parse_workspace() as workspace:
+        workspace_path = workspace.path
+        assert workspace.path.is_dir()
+        workspace.output_path("result.bin").write_bytes(b"result")
+
+    assert workspace_path is not None
+    assert not workspace_path.exists()
+
+
+@pytest.mark.asyncio
+async def test_parse_workspace_cleanup_failure_after_success_is_fatal(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workspace_path: Path | None = None
+
+    async def fail_cleanup(path: Path) -> None:
+        raise PermissionError(f"cleanup blocked for {path.name}")
+
+    monkeypatch.setattr(source_module, "_cleanup_workspace", fail_cleanup)
+
+    with pytest.raises(PermissionError, match="cleanup blocked"):
+        async with parse_workspace() as workspace:
+            workspace_path = workspace.path
+
+    assert workspace_path is not None
+    source_module._remove_workspace(workspace_path)
+
+
+@pytest.mark.asyncio
+async def test_parse_workspace_cleanup_failure_preserves_primary_exception(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workspace_path: Path | None = None
+
+    async def fail_cleanup(path: Path) -> None:
+        raise PermissionError(f"cleanup blocked for {path.name}")
+
+    monkeypatch.setattr(source_module, "_cleanup_workspace", fail_cleanup)
+
+    with pytest.raises(RuntimeError, match="primary failure") as exc_info:
+        async with parse_workspace() as workspace:
+            workspace_path = workspace.path
+            raise RuntimeError("primary failure")
+
+    notes = getattr(exc_info.value, "__notes__", [])
+    assert any("Parse workspace cleanup failed" in note for note in notes)
+    assert workspace_path is not None
+    source_module._remove_workspace(workspace_path)
+
+
+@pytest.mark.asyncio
+async def test_parse_workspace_cleanup_failure_preserves_cancellation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    entered = asyncio.Event()
+    workspace_path: Path | None = None
+
+    async def fail_cleanup(path: Path) -> None:
+        raise PermissionError(f"cleanup blocked for {path.name}")
+
+    monkeypatch.setattr(source_module, "_cleanup_workspace", fail_cleanup)
+
+    async def hold_workspace() -> None:
+        nonlocal workspace_path
+        async with parse_workspace() as workspace:
+            workspace_path = workspace.path
+            entered.set()
+            await asyncio.Event().wait()
+
+    task = asyncio.create_task(hold_workspace())
+    await entered.wait()
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError) as exc_info:
+        await task
+    notes = getattr(exc_info.value, "__notes__", [])
+    assert any("Parse workspace cleanup failed" in note for note in notes)
+    assert workspace_path is not None
+    source_module._remove_workspace(workspace_path)
+
+
+@pytest.mark.asyncio
+async def test_parse_workspace_is_removed_after_failure() -> None:
+    workspace_path: Path | None = None
+    with pytest.raises(RuntimeError, match="failed"):
+        async with parse_workspace() as workspace:
+            workspace_path = workspace.path
+            raise RuntimeError("failed")
+
+    assert workspace_path is not None
+    assert not workspace_path.exists()
 
 
 @pytest.mark.asyncio

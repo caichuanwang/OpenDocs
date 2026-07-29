@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import asyncio
 import os
+import shutil
+import sys
 import tempfile
 import warnings
 from collections.abc import AsyncIterator
@@ -32,6 +34,41 @@ class ResolvedSource:
             raise TypeError("original_name must be a str or None")
         if not isinstance(self.owned, bool):
             raise TypeError("owned must be a bool")
+
+
+@dataclass(frozen=True, slots=True)
+class ParseWorkspace:
+    path: Path
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.path, Path):
+            raise TypeError("path must be a Path")
+
+    def output_path(self, name: str) -> Path:
+        if not isinstance(name, str):
+            raise TypeError("output name must be a str")
+        candidate = Path(name)
+        windows_stem = name.split(".", 1)[0].rstrip(" ").upper()
+        windows_reserved = windows_stem in {"CON", "PRN", "AUX", "NUL", "CONIN$", "CONOUT$"} or (
+            len(windows_stem) == 4
+            and windows_stem[:3] in {"COM", "LPT"}
+            and windows_stem[3] in "123456789¹²³"
+        )
+        forbidden = '<>:"/\\|?*'
+        if (
+            not name
+            or name[-1] in {" ", "."}
+            or any(
+                ord(character) < 32 or ord(character) == 127 or character in forbidden
+                for character in name
+            )
+            or candidate.is_absolute()
+            or candidate.name != name
+            or name in {".", ".."}
+            or windows_reserved
+        ):
+            raise ValueError("output name must be a portable non-empty basename")
+        return self.path / name
 
 
 def _validated_path(source: str | os.PathLike[str]) -> Path:
@@ -151,7 +188,9 @@ async def _cleanup_after_cancellation(path: Path, *, wait: bool) -> None:
 
     try:
         await _cleanup_owned_path(path)
-    except BaseException as error:
+    except asyncio.CancelledError as error:
+        _warn_cleanup_failure(path, error)
+    except OSError as error:
         _warn_cleanup_failure(path, error)
 
 
@@ -162,16 +201,59 @@ async def _write_owned(data: bytes, *, wait_for_cleanup_on_cancel: bool) -> Path
         await asyncio.shield(write_task)
     except asyncio.CancelledError:
         if wait_for_cleanup_on_cancel:
-            with suppress(BaseException):
+            with suppress(asyncio.CancelledError, OSError):
                 await write_task
             await _cleanup_after_cancellation(path, wait=True)
         else:
             write_task.add_done_callback(lambda completed: _cleanup_finished_write(completed, path))
         raise
-    except BaseException:
+    except OSError:
         await _unlink_if_exists(path)
         raise
     return path
+
+
+def _create_workspace() -> Path:
+    return Path(tempfile.mkdtemp(prefix="opendocs-workspace-"))
+
+
+def _remove_workspace(path: Path) -> None:
+    try:
+        shutil.rmtree(path, ignore_errors=False)
+    except OSError as error:
+        raise RuntimeError(f"failed to remove parse workspace: {path}") from error
+
+
+async def _cleanup_workspace(path: Path) -> None:
+    cleanup_task = asyncio.create_task(asyncio.to_thread(_remove_workspace, path))
+    try:
+        await asyncio.shield(cleanup_task)
+    except asyncio.CancelledError:
+        with suppress(asyncio.CancelledError, RuntimeError, OSError):
+            await cleanup_task
+        raise
+
+
+async def _cleanup_workspace_after_error(path: Path, primary_error: BaseException) -> None:
+    try:
+        await _cleanup_workspace(path)
+    except asyncio.CancelledError as cleanup_error:
+        primary_error.add_note(f"Parse workspace cleanup failed for {path}: {cleanup_error}")
+    except (RuntimeError, OSError) as cleanup_error:
+        primary_error.add_note(f"Parse workspace cleanup failed for {path}: {cleanup_error}")
+
+
+@asynccontextmanager
+async def parse_workspace() -> AsyncIterator[ParseWorkspace]:
+    path = _create_workspace()
+    try:
+        yield ParseWorkspace(path)
+    finally:
+        primary_error = sys.exception()
+        if primary_error is None:
+            await _cleanup_workspace(path)
+        else:
+            await _cleanup_workspace_after_error(path, primary_error)
 
 
 @asynccontextmanager
@@ -201,29 +283,24 @@ async def materialize_source(
     )
     try:
         yield ResolvedSource(path=path, original_name=original_name, owned=True)
-    except asyncio.CancelledError:
-        await _cleanup_after_cancellation(
-            path,
-            wait=wait_for_cleanup_on_cancel,
-        )
-        raise
-    except BaseException as error:
-        try:
-            await _cleanup_owned_path(path)
-        except asyncio.CancelledError:
+    finally:
+        primary_error = sys.exception()
+        if isinstance(primary_error, asyncio.CancelledError):
             await _cleanup_after_cancellation(
                 path,
                 wait=wait_for_cleanup_on_cancel,
             )
-        except BaseException as cleanup_error:
-            error.add_note(f"Owned source cleanup failed for {path}: {cleanup_error}")
-        raise
-    else:
-        try:
-            await _cleanup_owned_path(path)
-        except asyncio.CancelledError:
-            await _cleanup_after_cancellation(
-                path,
-                wait=wait_for_cleanup_on_cancel,
-            )
-            raise
+        else:
+            try:
+                await _cleanup_owned_path(path)
+            except asyncio.CancelledError:
+                await _cleanup_after_cancellation(
+                    path,
+                    wait=wait_for_cleanup_on_cancel,
+                )
+                if primary_error is None:
+                    raise
+            except OSError as cleanup_error:
+                if primary_error is None:
+                    raise
+                primary_error.add_note(f"Owned source cleanup failed for {path}: {cleanup_error}")

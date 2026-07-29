@@ -33,6 +33,8 @@ class OpenDocsErrorCode(StrEnum):
     MODEL_PERMISSION = "model_permission"
     MODEL_INVALID_REQUEST = "model_invalid_request"
     MODEL_UNAVAILABLE = "model_unavailable"
+    MODEL_INVALID_RESPONSE = "model_invalid_response"
+    RUNTIME_DEPENDENCY = "runtime_dependency"
     NO_USABLE_CONTENT = "no_usable_content"
     SYNC_IN_ASYNC_CONTEXT = "sync_in_async_context"
 
@@ -95,6 +97,36 @@ class DocumentTimeoutError(OpenDocsError):
 class VisionRequiredError(OpenDocsError):
     def __init__(self, message: str) -> None:
         super().__init__(message, code=OpenDocsErrorCode.VISION_REQUIRED)
+
+
+class ModelAuthenticationError(OpenDocsError):
+    def __init__(self, message: str) -> None:
+        super().__init__(message, code=OpenDocsErrorCode.MODEL_AUTHENTICATION)
+
+
+class ModelPermissionError(OpenDocsError):
+    def __init__(self, message: str) -> None:
+        super().__init__(message, code=OpenDocsErrorCode.MODEL_PERMISSION)
+
+
+class ModelInvalidRequestError(OpenDocsError):
+    def __init__(self, message: str) -> None:
+        super().__init__(message, code=OpenDocsErrorCode.MODEL_INVALID_REQUEST)
+
+
+class ModelUnavailableError(OpenDocsError):
+    def __init__(self, message: str) -> None:
+        super().__init__(message, code=OpenDocsErrorCode.MODEL_UNAVAILABLE, retryable=True)
+
+
+class ModelInvalidResponseError(OpenDocsError):
+    def __init__(self, message: str) -> None:
+        super().__init__(message, code=OpenDocsErrorCode.MODEL_INVALID_RESPONSE)
+
+
+class RuntimeDependencyError(OpenDocsError):
+    def __init__(self, message: str) -> None:
+        super().__init__(message, code=OpenDocsErrorCode.RUNTIME_DEPENDENCY)
 
 
 class NoUsableContentError(OpenDocsError):

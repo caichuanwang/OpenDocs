@@ -1,7 +1,11 @@
 # OpenDocs
 
-OpenDocs is a Python SDK that converts caller-provided local documents into Markdown, and the M0
-foundation is complete with stable sync/async APIs plus TXT and Markdown support.
+OpenDocs is a Python SDK that converts caller-provided local documents into Markdown. M1 supports
+TXT, Markdown, standalone images, and native/hybrid/visual PDF parsing through stable sync/async
+APIs.
+
+The Python distribution name is `opendocs-sdk`, while the import package remains `opendocs`.
+OpenDocs has not been published to PyPI yet; install from a checkout until a release is announced.
 
 ## Install from an existing checkout
 
@@ -54,22 +58,50 @@ Accepted inputs:
 Callers own all remote downloads. `http://`, `https://`, `oss://`, and `s3://` sources must be
 downloaded before calling OpenDocs.
 
-## M0 behavior
+## M1 behavior
 
-`parse()` and `aparse()` return Markdown strings only. `VisionConfig` is already part of the public
-signature so callers can adopt the stable API now, but it is reserved for M1 and makes no model
-call in M0.
+`parse()` and `aparse()` return Markdown strings only. Image and visual PDF work uses the
+provider-neutral LiteLLM adapter when a `VisionConfig` is supplied. Native and blank PDF pages do
+not call a model or invoke Poppler. Poppler's `pdftoppm` executable is checked lazily only when a PDF
+page must be rasterized for hybrid or full-vision parsing.
+
+Install Poppler with your platform package manager before parsing visual PDFs (for example,
+`brew install poppler` on macOS or `apt-get install poppler-utils` on Debian/Ubuntu). Pillow,
+pdfplumber, and LiteLLM are installed as Python dependencies of `opendocs-sdk`.
+
+```python
+from opendocs import ParseOptions, VisionConfig, parse
+
+markdown = parse(
+    "scan.pdf",
+    options=ParseOptions(timeout=300, max_pages=100, vision_concurrency=4),
+    vision=VisionConfig(
+        model="openai/gpt-4o-mini",
+        api_key="...",  # Prefer an environment-backed secret in production.
+    ),
+)
+```
+
+Standalone images require `VisionConfig`. PDFs without vision configuration preserve usable native
+content and emit deterministic warnings for visual regions; a document with no usable native
+content raises `VisionRequiredError`. Model authentication, permission, invalid request, temporary
+unavailability, and invalid response failures use distinct typed exceptions. `ParseOptions` bounds
+the document timeout, page count, complete-block output size, and visual concurrency.
 
 ### Current format matrix
 
-| Format | Status in M0 | Notes |
+| Format | Status in M1 | Notes |
 | --- | --- | --- |
 | TXT | Available | Parsed end to end into deterministic Markdown |
-| Markdown (`.md`, `.markdown`) | Available | Preserved as Markdown only for `.md`/`.markdown` local paths or named binary streams; unnamed UTF-8 bytes/streams intentionally detect as TXT |
-| PDF | Planned for M1 | Detected now, raises a typed unsupported-format error in M0 |
-| PNG / JPEG / WebP | Planned for M1 | Caller still provides local files; vision path lands in M1 |
-| DOCX | Planned for M2 | Detected now, raises a typed unsupported-format error in M0 |
-| PPTX | Planned for M2 | Detected now, raises a typed unsupported-format error in M0 |
+| Markdown (`.md`, `.markdown`) | Available | Preserved for named Markdown paths/streams; unnamed UTF-8 bytes intentionally detect as TXT |
+| PDF | Available | Per-page native, hybrid, full-vision, or blank routing; source-ordered page boundaries and tables |
+| PNG / JPEG / WebP | Available | Static images only; sanitized before the configured vision model sees them |
+| DOCX | Planned for M2 | Detected now and raises a typed unsupported-format error |
+| PPTX | Planned for M2 | Detected now and raises a typed unsupported-format error |
+
+OpenDocs never downloads HTTP, OSS, or S3 URLs. Model calls may send sanitized images to the
+provider selected by `VisionConfig`; review that provider's privacy and cost terms before enabling
+vision.
 
 ## Warnings and errors
 

@@ -59,6 +59,42 @@ def test_invalid_source_error_exposes_expected_base_fields() -> None:
             False,
         ),
         (
+            opendocs.ModelAuthenticationError,
+            opendocs.OpenDocsErrorCode.MODEL_AUTHENTICATION,
+            "auth",
+            False,
+        ),
+        (
+            opendocs.ModelPermissionError,
+            opendocs.OpenDocsErrorCode.MODEL_PERMISSION,
+            "permission",
+            False,
+        ),
+        (
+            opendocs.ModelInvalidRequestError,
+            opendocs.OpenDocsErrorCode.MODEL_INVALID_REQUEST,
+            "request",
+            False,
+        ),
+        (
+            opendocs.ModelUnavailableError,
+            opendocs.OpenDocsErrorCode.MODEL_UNAVAILABLE,
+            "unavailable",
+            True,
+        ),
+        (
+            opendocs.ModelInvalidResponseError,
+            opendocs.OpenDocsErrorCode.MODEL_INVALID_RESPONSE,
+            "response",
+            False,
+        ),
+        (
+            opendocs.RuntimeDependencyError,
+            opendocs.OpenDocsErrorCode.RUNTIME_DEPENDENCY,
+            "runtime",
+            False,
+        ),
+        (
             opendocs.NoUsableContentError,
             opendocs.OpenDocsErrorCode.NO_USABLE_CONTENT,
             "empty",
@@ -94,6 +130,8 @@ def test_error_code_contains_public_model_error_codes() -> None:
     assert opendocs.OpenDocsErrorCode.MODEL_PERMISSION == "model_permission"
     assert opendocs.OpenDocsErrorCode.MODEL_INVALID_REQUEST == "model_invalid_request"
     assert opendocs.OpenDocsErrorCode.MODEL_UNAVAILABLE == "model_unavailable"
+    assert opendocs.OpenDocsErrorCode.MODEL_INVALID_RESPONSE == "model_invalid_response"
+    assert opendocs.OpenDocsErrorCode.RUNTIME_DEPENDENCY == "runtime_dependency"
 
 
 @pytest.mark.parametrize(

@@ -86,7 +86,7 @@ def detect_document_type(source: ResolvedSource) -> DocumentType:
         detected = _container_type(source.path)
 
     declared = _SUFFIX_TYPES.get(suffix)
-    if declared in {DocumentType.TEXT, DocumentType.MARKDOWN}:
+    if declared is DocumentType.TEXT or declared is DocumentType.MARKDOWN:
         if detected is not None:
             raise _mismatch(suffix, detected)
         _require_utf8(source.path)
