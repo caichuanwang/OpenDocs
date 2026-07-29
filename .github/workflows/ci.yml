@@ -31,5 +31,27 @@ jobs:
         run: uv run --frozen ruff format --check .
       - name: Run ty
         run: uv run --frozen ty check src tests
+      - name: Check patch whitespace
+        run: git diff --check
       - name: Build distributions
-        run: uv build
+        run: rm -rf dist && uv build
+      - name: Verify installed wheel
+        shell: bash
+        run: |
+          wheel="$(find dist -maxdepth 1 -name 'opendocs_sdk-*.whl' -print -quit)"
+          test -n "$wheel" && test -f "$wheel"
+          wheel_env="$RUNNER_TEMP/opendocs-wheel"
+          python -m venv "$wheel_env"
+          "$wheel_env/bin/pip" install "$wheel"
+          "$wheel_env/bin/python" - <<'PY'
+          import asyncio
+          from importlib.metadata import metadata
+
+          from opendocs import ParseOptions, VisionConfig, aparse, parse
+
+          assert metadata("opendocs-sdk")["Name"] == "opendocs-sdk"
+          assert parse(b"hello") == "hello\n"
+          assert asyncio.run(aparse(b"hello")) == "hello\n"
+          ParseOptions()
+          VisionConfig(model="openai/vision-model")
+          PY

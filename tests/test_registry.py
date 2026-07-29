@@ -4,9 +4,10 @@ from typing import Any, cast
 
 from opendocs import ParseOptions, UnsupportedDocumentError
 from opendocs._models import DocumentType, ParsedDocument, TextBlock
+from opendocs._runtime import ParserRuntime
 from opendocs.parsers.base import DocumentParser
-from opendocs.parsers.registry import ParserRegistry
-from opendocs.source import ResolvedSource
+from opendocs.parsers.registry import ParserRegistry, build_default_registry
+from opendocs.source import ParseWorkspace, ResolvedSource
 
 
 class StubParser:
@@ -132,3 +133,17 @@ def test_registry_rejects_non_document_type_on_get() -> None:
 def test_stub_satisfies_parser_protocol() -> None:
     parser: DocumentParser = StubParser()
     assert isinstance(parser, DocumentParser)
+
+
+def test_injected_default_registry_registers_all_m1_types(tmp_path) -> None:
+    runtime = ParserRuntime(ParseWorkspace(tmp_path))
+    try:
+        registry = build_default_registry(runtime)
+        assert registry.get(DocumentType.TEXT)
+        assert registry.get(DocumentType.MARKDOWN)
+        assert registry.get(DocumentType.IMAGE)
+        assert registry.get(DocumentType.PDF)
+    finally:
+        import asyncio
+
+        asyncio.run(runtime.aclose())

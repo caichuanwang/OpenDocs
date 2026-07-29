@@ -4,8 +4,9 @@ import tomllib
 from pathlib import Path
 from typing import TypedDict, cast
 
-import conftest as test_conftest
 import pytest
+
+from tests import conftest as test_conftest
 
 
 class CorpusFile(TypedDict):

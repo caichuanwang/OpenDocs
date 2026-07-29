@@ -1,7 +1,7 @@
 import tomllib
 from pathlib import Path
 
-import pytest
+import pytest  # pyright: ignore[reportMissingImports]
 
 _LOCAL_MANIFEST = Path(__file__).with_name("corpus.local.toml")
 
@@ -14,6 +14,21 @@ def pytest_addoption(parser: pytest.Parser) -> None:
         type=str,
         default=None,
         help="private corpus directory, or @local to read tests/corpus.local.toml",
+    )
+    parser.addoption(
+        "--m1-replay-dir",
+        dest="m1_replay_dir",
+        action="store",
+        type=str,
+        default=None,
+        help="local directory containing the M1 replay results.json fixture",
+    )
+    parser.addoption(
+        "--m1-live",
+        dest="m1_live",
+        action="store_true",
+        default=False,
+        help="explicitly enable the live M1 vision acceptance gate",
     )
 
 

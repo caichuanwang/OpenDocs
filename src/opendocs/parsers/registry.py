@@ -1,10 +1,16 @@
 from __future__ import annotations
 
 import inspect
+from typing import TYPE_CHECKING
 
 from opendocs._models import DocumentType
 from opendocs.errors import UnsupportedDocumentError
 from opendocs.parsers.base import DocumentParser
+
+if TYPE_CHECKING:
+    from opendocs._runtime import ParserRuntime
+    from opendocs.options import VisionConfig
+    from opendocs.vision.base import VisionClient
 
 
 def _require_document_type(value: object) -> DocumentType:
@@ -43,10 +49,29 @@ class ParserRegistry:
             ) from error
 
 
-def build_default_registry() -> ParserRegistry:
+def build_default_registry(
+    runtime: ParserRuntime | None = None,
+    vision: VisionClient | None = None,
+    vision_config: VisionConfig | None = None,
+    *,
+    deadline: float | None = None,
+) -> ParserRegistry:
     from opendocs.parsers.text import TextParser
 
     registry = ParserRegistry()
     registry.register(DocumentType.TEXT, TextParser(DocumentType.TEXT))
     registry.register(DocumentType.MARKDOWN, TextParser(DocumentType.MARKDOWN))
+    if runtime is None:
+        if vision is not None or vision_config is not None or deadline is not None:
+            raise ValueError("parser dependencies require a parser runtime")
+        return registry
+
+    from opendocs.parsers.image import ImageParser
+    from opendocs.parsers.pdf.parser import PDFParser
+
+    registry.register(DocumentType.IMAGE, ImageParser(runtime, vision, vision_config))
+    registry.register(
+        DocumentType.PDF,
+        PDFParser(runtime, vision, vision_config, deadline=deadline),
+    )
     return registry

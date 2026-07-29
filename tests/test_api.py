@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any, cast
 from zipfile import ZIP_DEFLATED, ZipFile
 
-import pytest
+import pytest  # pyright: ignore[reportMissingImports]
 
 import opendocs
 import opendocs.source as source_module
@@ -97,8 +97,6 @@ async def test_parse_rejects_a_running_event_loop() -> None:
 @pytest.mark.parametrize(
     ("content", "document_type"),
     [
-        (b"%PDF-1.7\n", "pdf"),
-        (b"\x89PNG\r\n\x1a\n", "image"),
         (_office_bytes("word/document.xml"), "docx"),
         (_office_bytes("ppt/presentation.xml"), "pptx"),
     ],
@@ -227,13 +225,22 @@ async def test_timeout_during_temp_write_returns_promptly_and_cleans_eventually(
 
 def test_sync_timeout_during_detection_cleans_temp_before_return(
     monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
 ) -> None:
-    temporary_path: Path | None = None
+    temporary_path = tmp_path / "owned-source"
     cleanup_impl = source_module._cleanup_owned_path
 
+    async def immediate_write(
+        data: bytes,
+        *,
+        wait_for_cleanup_on_cancel: bool,
+    ) -> Path:
+        del wait_for_cleanup_on_cancel
+        temporary_path.write_bytes(data)
+        return temporary_path
+
     async def blocked_detect(source: ResolvedSource) -> DocumentType:
-        nonlocal temporary_path
-        temporary_path = source.path
+        assert source.path == temporary_path
         await asyncio.Event().wait()
         raise AssertionError("timeout should cancel detection")
 
@@ -241,6 +248,7 @@ def test_sync_timeout_during_detection_cleans_temp_before_return(
         await asyncio.sleep(0.1)
         await cleanup_impl(path)
 
+    monkeypatch.setattr(source_module, "_write_owned", immediate_write)
     monkeypatch.setattr("opendocs.api._detect", blocked_detect)
     monkeypatch.setattr(source_module, "_cleanup_owned_path", delayed_cleanup)
 
@@ -248,11 +256,9 @@ def test_sync_timeout_during_detection_cleans_temp_before_return(
         with pytest.raises(DocumentTimeoutError):
             parse(b"hello", options=ParseOptions(timeout=0.01))
 
-        assert temporary_path is not None
         assert not temporary_path.exists()
     finally:
-        if temporary_path is not None:
-            temporary_path.unlink(missing_ok=True)
+        temporary_path.unlink(missing_ok=True)
 
 
 def test_sync_timeout_during_temp_write_cleans_temp_before_return(
@@ -452,11 +458,17 @@ def test_public_all_exposes_only_the_documented_surface() -> None:
         "DocumentTypeMismatchError",
         "InvalidSourceError",
         "LimitExceededError",
+        "ModelAuthenticationError",
+        "ModelInvalidRequestError",
+        "ModelInvalidResponseError",
+        "ModelPermissionError",
+        "ModelUnavailableError",
         "NoUsableContentError",
         "OpenDocsError",
         "OpenDocsErrorCode",
         "OpenDocsWarning",
         "ParseOptions",
+        "RuntimeDependencyError",
         "SyncInAsyncContextError",
         "UnsupportedDocumentError",
         "VisionConfig",
