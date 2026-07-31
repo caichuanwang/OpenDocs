@@ -180,6 +180,39 @@ def test_png_comment_metadata_is_removed(tmp_path: Path) -> None:
         assert sanitized.info == {}
 
 
+def test_embedded_image_sanitizer_uses_content_without_declared_suffix(
+    tmp_path: Path,
+) -> None:
+    source_path = tmp_path / "office-media.bin"
+    output_path = tmp_path / "sanitized.png"
+    pnginfo = PngImagePlugin.PngInfo()
+    pnginfo.add_text("Comment", "private-comment")
+    Image.new("RGB", (20, 10), "white").save(source_path, "PNG", pnginfo=pnginfo)
+    source_bytes = source_path.read_bytes()
+
+    assert image_module._sanitize_embedded_image(source_path, output_path) == (20, 10)
+
+    assert source_path.read_bytes() == source_bytes
+    with Image.open(output_path) as sanitized:
+        sanitized.load()
+        assert sanitized.format == "PNG"
+        assert sanitized.mode == "RGB"
+        assert sanitized.info == {}
+
+
+def test_embedded_image_sanitizer_keeps_standalone_mismatch_policy(
+    tmp_path: Path,
+) -> None:
+    source_path = tmp_path / "declared.jpg"
+    embedded_output = tmp_path / "embedded.png"
+    standalone_output = tmp_path / "standalone.png"
+    _save(source_path, "PNG")
+
+    assert image_module._sanitize_embedded_image(source_path, embedded_output) == (20, 10)
+    with pytest.raises(DocumentTypeMismatchError):
+        image_module._sanitize_image(source_path, standalone_output, source_path.name)
+
+
 @pytest.mark.asyncio
 async def test_image_parser_applies_exif_rotation_and_resize(tmp_path: Path) -> None:
     source_path = tmp_path / "rotated.jpg"

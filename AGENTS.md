@@ -55,6 +55,12 @@ Use pytest and pytest-asyncio. Name tests `test_<behavior>` and lock regressions
 before changing production code. Cover equivalent path, bytes, and binary-stream inputs where an
 API contract applies. Run targeted tests first, then the complete verification commands above.
 
+Private acceptance checklists may be tool-assisted, but their initial baseline must be reviewed and
+explicitly approved by a maintainer against the source documents. After approval, regression checks
+must be automated. Never regenerate or accept a baseline merely to make a failing gate pass. Commit
+only the checklist schema, validator, and synthetic examples; real content anchors, expectation
+hashes, model output, and completed checklists must remain in ignored local files.
+
 ## Commit & Pull Request Guidelines
 
 Follow the repository's Lore convention: start with an intent line explaining why the change
@@ -63,3 +69,6 @@ exists, then add useful git trailers such as `Constraint:`, `Rejected:`, `Confid
 link relevant issues or milestones, list exact verification performed, and call out dependency,
 format-support, corpus, or runtime gaps. Never include credentials, private documents, model
 payloads, or generated parse output.
+
+# lanauage
+你的第一工作语言是简体中文，所有报告文档等输出中文

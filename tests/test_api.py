@@ -15,11 +15,11 @@ import pytest  # pyright: ignore[reportMissingImports]
 import opendocs
 import opendocs.source as source_module
 from opendocs import (
+    CorruptDocumentError,
     DocumentTimeoutError,
     OpenDocsWarning,
     ParseOptions,
     SyncInAsyncContextError,
-    UnsupportedDocumentError,
     VisionConfig,
     aparse,
     parse,
@@ -101,11 +101,12 @@ async def test_parse_rejects_a_running_event_loop() -> None:
         (_office_bytes("ppt/presentation.xml"), "pptx"),
     ],
 )
-async def test_detected_future_formats_are_typed_unsupported(
+async def test_detected_malformed_office_packages_raise_typed_corruption(
     content: bytes,
     document_type: str,
 ) -> None:
-    with pytest.raises(UnsupportedDocumentError, match=document_type):
+    del document_type
+    with pytest.raises(CorruptDocumentError, match="relationships"):
         await aparse(content)
 
 

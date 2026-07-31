@@ -30,6 +30,29 @@ def pytest_addoption(parser: pytest.Parser) -> None:
         default=False,
         help="explicitly enable the live M1 vision acceptance gate",
     )
+    parser.addoption(
+        "--m2-checklist-dir",
+        dest="m2_checklist_dir",
+        action="store",
+        type=str,
+        default=None,
+        help="local directory containing the M2 approved checklist.toml baseline",
+    )
+    parser.addoption(
+        "--m2-replay-dir",
+        dest="m2_replay_dir",
+        action="store",
+        type=str,
+        default=None,
+        help="local directory containing the M2 replay.json fixture",
+    )
+    parser.addoption(
+        "--m2-live",
+        dest="m2_live",
+        action="store_true",
+        default=False,
+        help="explicitly enable the live M2 office acceptance gate",
+    )
 
 
 def _resolve_local_corpus_dir(local_manifest: Path | None = None) -> str:

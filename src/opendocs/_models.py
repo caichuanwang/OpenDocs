@@ -4,6 +4,7 @@ import math
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import TypeAlias
+from urllib.parse import urlsplit
 
 
 def _require_string(name: str, value: object) -> str:
@@ -31,9 +32,22 @@ def _require_tuple(name: str, value: object) -> tuple[object, ...]:
 
 
 def _require_block(name: str, index: int, value: object) -> Block:
-    if not isinstance(value, TextBlock | MarkdownBlock | PageBreakBlock | TableBlock):
+    if not isinstance(
+        value,
+        TextBlock
+        | MarkdownBlock
+        | PageBreakBlock
+        | TableBlock
+        | ParagraphBlock
+        | HeadingBlock
+        | ListItemBlock
+        | HardPageBreakBlock
+        | SpannedTableBlock,
+    ):
         raise TypeError(
-            f"{name}[{index}] must be a TextBlock, MarkdownBlock, PageBreakBlock, or TableBlock"
+            f"{name}[{index}] must be a TextBlock, MarkdownBlock, PageBreakBlock, TableBlock, "
+            "ParagraphBlock, HeadingBlock, ListItemBlock, HardPageBreakBlock, or "
+            "SpannedTableBlock"
         )
     return value
 
@@ -53,6 +67,47 @@ class DocumentType(StrEnum):
     PPTX = "pptx"
 
 
+class ListKind(StrEnum):
+    BULLET = "bullet"
+    ORDERED = "ordered"
+
+
+def _require_inline(name: str, index: int, value: object) -> Inline:
+    if not isinstance(value, InlineText | InlineLink):
+        raise TypeError(f"{name}[{index}] must be an InlineText or InlineLink")
+    return value
+
+
+def _require_inline_tuple(name: str, value: object) -> tuple[Inline, ...]:
+    items = _require_tuple(name, value)
+    if not items:
+        raise ValueError(f"{name} must contain at least one inline")
+    normalized: list[Inline] = []
+    for index, item in enumerate(items):
+        normalized.append(_require_inline(name, index, item))
+    return tuple(normalized)
+
+
+def _require_list_kind(value: object) -> ListKind:
+    if not isinstance(value, ListKind):
+        raise TypeError("kind must be a ListKind")
+    return value
+
+
+def _normalize_link_target(target: object) -> str:
+    normalized = _require_string("target", target)
+    if not normalized:
+        raise ValueError("target must not be empty")
+    if normalized != normalized.strip():
+        raise ValueError("target must not have surrounding whitespace")
+    if any(character.isspace() for character in normalized):
+        raise ValueError("target must not contain whitespace")
+    if any(ord(character) < 32 or ord(character) == 127 for character in normalized):
+        raise ValueError("target must not contain control characters")
+    urlsplit(normalized)
+    return normalized
+
+
 @dataclass(frozen=True, slots=True)
 class TextBlock:
     text: str
@@ -70,6 +125,30 @@ class MarkdownBlock:
 
 
 @dataclass(frozen=True, slots=True)
+class InlineText:
+    text: str
+
+    def __post_init__(self) -> None:
+        _require_string("text", self.text)
+
+
+@dataclass(frozen=True, slots=True, init=False)
+class InlineLink:
+    label: str
+    target: str
+
+    def __init__(self, label: str, target: str) -> None:
+        normalized_label = _require_string("label", label)
+        if not normalized_label:
+            raise ValueError("label must not be empty")
+        object.__setattr__(self, "label", normalized_label)
+        object.__setattr__(self, "target", _normalize_link_target(target))
+
+
+Inline: TypeAlias = InlineText | InlineLink
+
+
+@dataclass(frozen=True, slots=True)
 class PageBreakBlock:
     page_number: int
 
@@ -77,6 +156,62 @@ class PageBreakBlock:
         page_number = _require_int("page_number", self.page_number)
         if page_number <= 0:
             raise ValueError("page_number must be greater than zero")
+
+
+@dataclass(frozen=True, slots=True, init=False)
+class ParagraphBlock:
+    inlines: tuple[Inline, ...]
+
+    def __init__(self, inlines: tuple[Inline, ...]) -> None:
+        object.__setattr__(self, "inlines", _require_inline_tuple("inlines", inlines))
+
+
+@dataclass(frozen=True, slots=True, init=False)
+class HeadingBlock:
+    level: int
+    inlines: tuple[Inline, ...]
+
+    def __init__(self, level: int, inlines: tuple[Inline, ...]) -> None:
+        normalized_level = _require_int("level", level)
+        object.__setattr__(self, "level", min(max(normalized_level, 1), 6))
+        object.__setattr__(self, "inlines", _require_inline_tuple("inlines", inlines))
+
+
+@dataclass(frozen=True, slots=True, init=False)
+class ListItemBlock:
+    list_id: int
+    level: int
+    kind: ListKind
+    ordinal: int
+    inlines: tuple[Inline, ...]
+
+    def __init__(
+        self,
+        list_id: int,
+        level: int,
+        kind: ListKind,
+        ordinal: int,
+        inlines: tuple[Inline, ...],
+    ) -> None:
+        normalized_list_id = _require_int("list_id", list_id)
+        if normalized_list_id < 0:
+            raise ValueError("list_id must be greater than or equal to zero")
+        normalized_level = _require_int("level", level)
+        if normalized_level < 0:
+            raise ValueError("level must be greater than or equal to zero")
+        normalized_ordinal = _require_int("ordinal", ordinal)
+        if normalized_ordinal <= 0:
+            raise ValueError("ordinal must be greater than zero")
+        object.__setattr__(self, "list_id", normalized_list_id)
+        object.__setattr__(self, "level", normalized_level)
+        object.__setattr__(self, "kind", _require_list_kind(kind))
+        object.__setattr__(self, "ordinal", normalized_ordinal)
+        object.__setattr__(self, "inlines", _require_inline_tuple("inlines", inlines))
+
+
+@dataclass(frozen=True, slots=True)
+class HardPageBreakBlock:
+    pass
 
 
 @dataclass(frozen=True, slots=True, init=False)
@@ -122,7 +257,112 @@ class TableBlock:
         object.__setattr__(self, "header_rows", normalized_header_rows)
 
 
-Block: TypeAlias = TextBlock | MarkdownBlock | PageBreakBlock | TableBlock
+@dataclass(frozen=True, slots=True, init=False)
+class SpannedTableCell:
+    row: int
+    column: int
+    row_span: int
+    column_span: int
+    text: str
+
+    def __init__(
+        self,
+        row: int,
+        column: int,
+        row_span: int,
+        column_span: int,
+        text: str,
+    ) -> None:
+        normalized_row = _require_int("row", row)
+        normalized_column = _require_int("column", column)
+        normalized_row_span = _require_int("row_span", row_span)
+        normalized_column_span = _require_int("column_span", column_span)
+        if normalized_row < 0:
+            raise ValueError("row must be greater than or equal to zero")
+        if normalized_column < 0:
+            raise ValueError("column must be greater than or equal to zero")
+        if normalized_row_span <= 0:
+            raise ValueError("row_span must be greater than zero")
+        if normalized_column_span <= 0:
+            raise ValueError("column_span must be greater than zero")
+        object.__setattr__(self, "row", normalized_row)
+        object.__setattr__(self, "column", normalized_column)
+        object.__setattr__(self, "row_span", normalized_row_span)
+        object.__setattr__(self, "column_span", normalized_column_span)
+        object.__setattr__(self, "text", _require_string("text", text))
+
+
+@dataclass(frozen=True, slots=True, init=False)
+class SpannedTableBlock:
+    row_count: int
+    column_count: int
+    cells: tuple[SpannedTableCell, ...]
+    header_rows: int
+
+    def __init__(
+        self,
+        row_count: int,
+        column_count: int,
+        cells: tuple[SpannedTableCell, ...],
+        header_rows: int,
+    ) -> None:
+        normalized_row_count = _require_int("row_count", row_count)
+        normalized_column_count = _require_int("column_count", column_count)
+        if normalized_row_count <= 0:
+            raise ValueError("row_count must be greater than zero")
+        if normalized_column_count <= 0:
+            raise ValueError("column_count must be greater than zero")
+
+        normalized_cells_raw = _require_tuple("cells", cells)
+        if not normalized_cells_raw:
+            raise ValueError("cells must contain at least one cell")
+
+        normalized_cells: list[SpannedTableCell] = []
+        occupied = [
+            [False for _ in range(normalized_column_count)] for _ in range(normalized_row_count)
+        ]
+        for index, cell_value in enumerate(normalized_cells_raw):
+            if not isinstance(cell_value, SpannedTableCell):
+                raise TypeError(f"cells[{index}] must be a SpannedTableCell")
+            row_limit = cell_value.row + cell_value.row_span
+            column_limit = cell_value.column + cell_value.column_span
+            if row_limit > normalized_row_count or column_limit > normalized_column_count:
+                raise ValueError("cells must remain within table bounds")
+            for row_index in range(cell_value.row, row_limit):
+                for column_index in range(cell_value.column, column_limit):
+                    if occupied[row_index][column_index]:
+                        raise ValueError("cells must not overlap")
+                    occupied[row_index][column_index] = True
+            normalized_cells.append(cell_value)
+
+        if not all(all(row) for row in occupied):
+            raise ValueError("cells must cover every coordinate in the table")
+
+        normalized_header_rows = _require_int("header_rows", header_rows)
+        if not 0 <= normalized_header_rows <= normalized_row_count:
+            raise ValueError("header_rows must be between zero and the number of rows")
+
+        object.__setattr__(self, "row_count", normalized_row_count)
+        object.__setattr__(self, "column_count", normalized_column_count)
+        object.__setattr__(
+            self,
+            "cells",
+            tuple(sorted(normalized_cells, key=lambda cell: (cell.row, cell.column))),
+        )
+        object.__setattr__(self, "header_rows", normalized_header_rows)
+
+
+Block: TypeAlias = (
+    TextBlock
+    | MarkdownBlock
+    | PageBreakBlock
+    | TableBlock
+    | ParagraphBlock
+    | HeadingBlock
+    | ListItemBlock
+    | HardPageBreakBlock
+    | SpannedTableBlock
+)
 
 
 @dataclass(frozen=True, slots=True)

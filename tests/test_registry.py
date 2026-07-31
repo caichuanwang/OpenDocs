@@ -6,6 +6,7 @@ from opendocs import ParseOptions, UnsupportedDocumentError
 from opendocs._models import DocumentType, ParsedDocument, TextBlock
 from opendocs._runtime import ParserRuntime
 from opendocs.parsers.base import DocumentParser
+from opendocs.parsers.office.parser import OfficeParser
 from opendocs.parsers.registry import ParserRegistry, build_default_registry
 from opendocs.source import ParseWorkspace, ResolvedSource
 
@@ -135,7 +136,7 @@ def test_stub_satisfies_parser_protocol() -> None:
     assert isinstance(parser, DocumentParser)
 
 
-def test_injected_default_registry_registers_all_m1_types(tmp_path) -> None:
+def test_injected_default_registry_registers_all_core_types(tmp_path) -> None:
     runtime = ParserRuntime(ParseWorkspace(tmp_path))
     try:
         registry = build_default_registry(runtime)
@@ -143,6 +144,8 @@ def test_injected_default_registry_registers_all_m1_types(tmp_path) -> None:
         assert registry.get(DocumentType.MARKDOWN)
         assert registry.get(DocumentType.IMAGE)
         assert registry.get(DocumentType.PDF)
+        assert isinstance(registry.get(DocumentType.DOCX), OfficeParser)
+        assert isinstance(registry.get(DocumentType.PPTX), OfficeParser)
     finally:
         import asyncio
 
