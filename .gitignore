@@ -226,3 +226,6 @@ tests/m2-acceptance.local/
 tests/m2-replay.local/
 
 .pi-subagents
+.codex
+.serena
+.omx
