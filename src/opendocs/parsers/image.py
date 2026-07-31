@@ -91,6 +91,11 @@ def _sanitize_image(
     return final_size
 
 
+def _sanitize_embedded_image(source_path: Path, output_path: Path) -> tuple[int, int]:
+    """Sanitize trusted-workspace media without applying a caller filename policy."""
+    return _sanitize_image(source_path, output_path, None)
+
+
 class ImageParser:
     def __init__(
         self,

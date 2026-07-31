@@ -9,10 +9,19 @@ from opendocs._models import (
     BBox,
     CoordinateTransform,
     DocumentType,
+    HardPageBreakBlock,
+    HeadingBlock,
+    InlineLink,
+    InlineText,
+    ListItemBlock,
+    ListKind,
     MarkdownBlock,
     PageBreakBlock,
+    ParagraphBlock,
     ParsedDocument,
     RenderResult,
+    SpannedTableBlock,
+    SpannedTableCell,
     TableBlock,
     TextBlock,
     WarningRecord,
@@ -44,6 +53,32 @@ def test_parsed_document_preserves_block_order_and_tuple_storage() -> None:
     assert isinstance(document.warnings, tuple)
 
 
+def test_inline_semantic_models_validate_and_normalize() -> None:
+    heading = HeadingBlock(9, (InlineText("Title"),))
+    item = ListItemBlock(2, 1, ListKind.ORDERED, 3, (InlineText("First"),))
+    table = SpannedTableBlock(
+        row_count=2,
+        column_count=3,
+        cells=(
+            SpannedTableCell(0, 0, 1, 2, "Header"),
+            SpannedTableCell(0, 2, 1, 1, "Value"),
+            SpannedTableCell(1, 0, 1, 1, "Left"),
+            SpannedTableCell(1, 1, 1, 2, "Right"),
+        ),
+        header_rows=1,
+    )
+
+    assert heading.level == 6
+    assert item.kind is ListKind.ORDERED
+    assert table.cells == (
+        SpannedTableCell(0, 0, 1, 2, "Header"),
+        SpannedTableCell(0, 2, 1, 1, "Value"),
+        SpannedTableCell(1, 0, 1, 1, "Left"),
+        SpannedTableCell(1, 1, 1, 2, "Right"),
+    )
+    assert table.header_rows == 1
+
+
 def test_models_are_frozen() -> None:
     document = ParsedDocument(
         document_type=DocumentType.TEXT,
@@ -71,6 +106,50 @@ def test_models_reject_non_string_fields(
 ) -> None:
     with pytest.raises(TypeError, match=field_name):
         factory(cast(Any, 123))
+
+
+@pytest.mark.parametrize(
+    ("factory", "message"),
+    [
+        (lambda: InlineLink("", "https://example.com"), "label"),
+        (lambda: InlineLink("docs", ""), "target"),
+        (lambda: InlineLink("docs", " https://example.com"), "target"),
+        (lambda: InlineLink("docs", "https://exa\nmple.com"), "target"),
+        (lambda: ParagraphBlock(cast(Any, [InlineText("alpha")])), "inlines"),
+        (lambda: ParagraphBlock(()), "at least one inline"),
+        (lambda: ParagraphBlock((cast(Any, "alpha"),)), "inlines\\[0\\]"),
+        (lambda: HeadingBlock(cast(Any, "1"), (InlineText("alpha"),)), "level"),
+        (
+            lambda: ListItemBlock(1, cast(Any, True), ListKind.BULLET, 1, (InlineText("alpha"),)),
+            "level",
+        ),
+        (
+            lambda: ListItemBlock(1, -1, ListKind.BULLET, 1, (InlineText("alpha"),)),
+            "level",
+        ),
+        (
+            lambda: ListItemBlock(
+                cast(Any, "1"),
+                0,
+                ListKind.BULLET,
+                1,
+                (InlineText("alpha"),),
+            ),
+            "list_id",
+        ),
+        (
+            lambda: ListItemBlock(1, 0, cast(Any, "bullet"), 1, (InlineText("alpha"),)),
+            "kind",
+        ),
+        (
+            lambda: ListItemBlock(1, 0, ListKind.BULLET, 0, (InlineText("alpha"),)),
+            "ordinal",
+        ),
+    ],
+)
+def test_new_semantic_models_reject_invalid_inputs(factory: Any, message: str) -> None:
+    with pytest.raises((TypeError, ValueError), match=message):
+        factory()
 
 
 def test_parsed_document_rejects_non_document_type() -> None:
@@ -146,6 +225,31 @@ def test_page_break_and_table_are_valid_document_blocks() -> None:
     )
 
     assert document.blocks[0] == PageBreakBlock(1)
+
+
+def test_new_semantic_blocks_are_valid_document_blocks() -> None:
+    document = ParsedDocument(
+        document_type=DocumentType.DOCX,
+        blocks=(
+            ParagraphBlock(
+                (
+                    InlineText("para"),
+                    InlineLink("docs", "https://example.com"),
+                )
+            ),
+            HeadingBlock(2, (InlineText("heading"),)),
+            ListItemBlock(1, 0, ListKind.BULLET, 1, (InlineText("item"),)),
+            HardPageBreakBlock(),
+            SpannedTableBlock(
+                row_count=1,
+                column_count=1,
+                cells=(SpannedTableCell(0, 0, 1, 1, "cell"),),
+                header_rows=0,
+            ),
+        ),
+    )
+
+    assert isinstance(document.blocks[3], HardPageBreakBlock)
 
 
 @pytest.mark.parametrize("page_number", [0, -1, cast(Any, True), cast(Any, "1")])
@@ -279,6 +383,66 @@ def test_render_result_requires_tuple_warnings() -> None:
         RenderResult(
             markdown="alpha",
             warnings=cast(Any, [WarningRecord(code="code", message="message")]),
+        )
+
+
+@pytest.mark.parametrize(
+    ("cells_factory", "row_count", "column_count", "header_rows", "message"),
+    [
+        (lambda: (), 1, 1, 0, "at least one cell"),
+        (lambda: (SpannedTableCell(0, 0, 1, 1, "a"),), 0, 1, 0, "row_count"),
+        (lambda: (SpannedTableCell(0, 0, 1, 1, "a"),), 1, 0, 0, "column_count"),
+        (lambda: (SpannedTableCell(0, 0, 1, 1, "a"),), 1, 1, 2, "header_rows"),
+        (
+            lambda: (SpannedTableCell(0, 0, 1, 1, "a"), SpannedTableCell(0, 0, 1, 1, "b")),
+            1,
+            1,
+            0,
+            "overlap",
+        ),
+        (
+            lambda: (SpannedTableCell(0, 0, 1, 1, "a"),),
+            1,
+            2,
+            0,
+            "cover every coordinate",
+        ),
+        (
+            lambda: (SpannedTableCell(0, 1, 1, 1, "a"),),
+            1,
+            1,
+            0,
+            "within table bounds",
+        ),
+        (
+            lambda: (SpannedTableCell(0, 0, 0, 1, "a"),),
+            1,
+            1,
+            0,
+            "row_span",
+        ),
+        (
+            lambda: (SpannedTableCell(0, 0, 1, 0, "a"),),
+            1,
+            1,
+            0,
+            "column_span",
+        ),
+    ],
+)
+def test_spanned_table_block_rejects_invalid_coverage(
+    cells_factory: Any,
+    row_count: int,
+    column_count: int,
+    header_rows: int,
+    message: str,
+) -> None:
+    with pytest.raises((TypeError, ValueError), match=message):
+        SpannedTableBlock(
+            row_count=row_count,
+            column_count=column_count,
+            cells=cells_factory(),
+            header_rows=header_rows,
         )
 
 

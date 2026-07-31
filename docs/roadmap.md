@@ -45,12 +45,21 @@ Exit criteria:
 
 ## M2 - Office
 
+Status: implementation complete; public verification is available, and milestone acceptance is
+pending a maintainer-approved local checklist.
+
+Implementation architecture:
+[M2 Office Architecture and Implementation Plan](plans/2026-07-29-m2-office-architecture.md).
+
+Detailed execution plan:
+[M2 Office Detailed Implementation Plan](plans/2026-07-29-m2-office-implementation.md).
+
 Summary:
 
-- add DOCX and PPTX native extractors
+- ship DOCX and PPTX native extractors as core formats
 - preserve paragraph, table, slide, and shape order
 - merge embedded-image vision output through the existing vision path
-- activate the DOCX and PPTX acceptance assets
+- provide an opt-in, hash-first gate for the DOCX and PPTX acceptance assets
 
 Exit criteria:
 

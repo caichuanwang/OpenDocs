@@ -1,8 +1,8 @@
 # OpenDocs
 
-OpenDocs is a Python SDK that converts caller-provided local documents into Markdown. M1 supports
-TXT, Markdown, standalone images, and native/hybrid/visual PDF parsing through stable sync/async
-APIs.
+OpenDocs is a Python SDK that converts caller-provided local documents into Markdown. M2 supports
+TXT, Markdown, standalone images, native/hybrid/visual PDF parsing, and native DOCX/PPTX extraction
+through stable sync/async APIs.
 
 The Python distribution name is `opendocs-sdk`, while the import package remains `opendocs`.
 OpenDocs has not been published to PyPI yet; install from a checkout until a release is announced.
@@ -58,7 +58,7 @@ Accepted inputs:
 Callers own all remote downloads. `http://`, `https://`, `oss://`, and `s3://` sources must be
 downloaded before calling OpenDocs.
 
-## M1 behavior
+## Current behavior
 
 `parse()` and `aparse()` return Markdown strings only. Image and visual PDF work uses the
 provider-neutral LiteLLM adapter when a `VisionConfig` is supplied. Native and blank PDF pages do
@@ -67,7 +67,8 @@ page must be rasterized for hybrid or full-vision parsing.
 
 Install Poppler with your platform package manager before parsing visual PDFs (for example,
 `brew install poppler` on macOS or `apt-get install poppler-utils` on Debian/Ubuntu). Pillow,
-pdfplumber, and LiteLLM are installed as Python dependencies of `opendocs-sdk`.
+pdfplumber, LiteLLM, python-docx, and python-pptx are installed as Python dependencies of
+`opendocs-sdk`.
 
 ```python
 from opendocs import ParseOptions, VisionConfig, parse
@@ -82,26 +83,34 @@ markdown = parse(
 )
 ```
 
-Standalone images require `VisionConfig`. PDFs without vision configuration preserve usable native
-content and emit deterministic warnings for visual regions; a document with no usable native
-content raises `VisionRequiredError`. Model authentication, permission, invalid request, temporary
-unavailability, and invalid response failures use distinct typed exceptions. `ParseOptions` bounds
-the document timeout, page count, complete-block output size, and visual concurrency.
+Standalone images require `VisionConfig`. PDFs and Office documents without vision configuration
+preserve usable native content and emit deterministic warnings for visual regions; a document with
+no usable native content raises `VisionRequiredError`. Model authentication, permission, invalid
+request, temporary unavailability, and invalid response failures use distinct typed exceptions.
+`ParseOptions` bounds the document timeout, PPTX/PDF page count, complete-block output size, and
+visual concurrency.
+
+DOCX extraction preserves authored body paragraphs, headings, lists, safe links, tables, merged
+cells, explicit page breaks, and inline raster-image positions. A DOCX remains one continuous
+logical flow; `max_pages` does not infer physical Word pages. PPTX extraction emits every slide
+boundary and traverses each slide's shape tree in source order, including recursive groups, text,
+tables, accessible chart data, and raster pictures. Exact duplicate embedded images are analyzed
+once per parse and replayed at every authored slot.
 
 ### Current format matrix
 
-| Format | Status in M1 | Notes |
+| Format | Status in M2 | Notes |
 | --- | --- | --- |
 | TXT | Available | Parsed end to end into deterministic Markdown |
 | Markdown (`.md`, `.markdown`) | Available | Preserved for named Markdown paths/streams; unnamed UTF-8 bytes intentionally detect as TXT |
 | PDF | Available | Per-page native, hybrid, full-vision, or blank routing; source-ordered page boundaries and tables |
 | PNG / JPEG / WebP | Available | Static images only; sanitized before the configured vision model sees them |
-| DOCX | Planned for M2 | Detected now and raises a typed unsupported-format error |
-| PPTX | Planned for M2 | Detected now and raises a typed unsupported-format error |
+| DOCX | Available | Continuous authored body flow with structured text, lists, links, tables, explicit breaks, and inline images |
+| PPTX | Available | Slide and shape-tree order with text, tables, accessible charts, groups, and inline images |
 
-OpenDocs never downloads HTTP, OSS, or S3 URLs. Model calls may send sanitized images to the
-provider selected by `VisionConfig`; review that provider's privacy and cost terms before enabling
-vision.
+OpenDocs never downloads HTTP, OSS, or S3 URLs, including Office hyperlink targets and external
+relationships. Model calls may send sanitized images to the provider selected by `VisionConfig`;
+review that provider's privacy and cost terms before enabling vision.
 
 ## Warnings and errors
 

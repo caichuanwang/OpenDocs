@@ -221,5 +221,8 @@ __marimo__/
 .ty/
 tests/corpus/
 tests/corpus.local.toml
+tests/m1-replay.local/
+tests/m2-acceptance.local/
+tests/m2-replay.local/
 
 .pi-subagents

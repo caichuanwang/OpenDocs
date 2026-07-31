@@ -30,7 +30,7 @@ git diff --check
 
 Expected public result:
 
-- `pytest` passes with the private-corpus and M1 replay/live gates skipped when their explicit
+- `pytest` passes with the private-corpus and M1/M2 replay/live gates skipped when their explicit
   options are not provided
 - Ruff, formatting, ty, and build exit `0`
 - `dist/` contains a wheel and source distribution and remains ignored
@@ -70,7 +70,11 @@ Expected result:
 Run these scans before committing changes that might blur milestone boundaries:
 
 ```bash
-! rg -n "python-docx|python-pptx|PyMuPDF|PyZeroX" pyproject.toml src tests
+rg -n 'python-docx|python-pptx' pyproject.toml uv.lock
+rg -n '^(from|import) (docx|pptx)' src/opendocs/parsers/office
+! rg -n '^(from|import) (docx|pptx)' src/opendocs \
+  --glob '!parsers/office/**'
+! rg -n "PyMuPDF|PyZeroX" pyproject.toml src tests
 rg -n "litellm|pdfplumber|PIL" pyproject.toml src/opendocs
 rg -n "_REMOTE_SCHEMES" src/opendocs/source.py
 ! rg -n "^(from|import) (requests|httpx|boto3|oss2|urllib\.request)" src/opendocs
@@ -80,8 +84,9 @@ rg -n "_REMOTE_SCHEMES" src/opendocs/source.py
 
 Expected result:
 
-- only M1 Pillow/pdfplumber/LiteLLM dependencies are present; future Office/PyMuPDF dependencies
-  remain absent
+- the core python-docx/python-pptx dependencies are declared and their imports stay inside the
+  Office-native modules
+- future PyMuPDF/PyZeroX dependencies remain absent
 - `_REMOTE_SCHEMES` is present in `src/opendocs/source.py`
 - the forbidden network-import scan returns no matches
 - `src/opendocs/__init__.py` does not re-export private modules
@@ -117,6 +122,41 @@ uv run --frozen pytest tests/test_m1_acceptance.py -q --corpus-dir=@local --m1-l
 outside Git. `tests/corpus.local.toml` and `tests/m1-replay.local/` are local-only inputs. The M1
 fixture validates all three private file paths and hashes before exposing any path to parsing tests;
 it never prints document content or model payloads.
+
+### M2 Office acceptance
+
+The M2 gate additionally requires a local, maintainer-approved checklist for exactly one DOCX and
+one PPTX from the public manifest. Candidate generation must always produce `approved = false`.
+Before changing that field locally, a maintainer must compare every derived anchor and structural
+count against both source documents. A generated candidate is evidence to review, not approval.
+Anchor hashes are SHA-256 values of stripped, non-empty rendered Markdown lines; use
+`tests.m2_acceptance.markdown_anchor_hashes()` when preparing the local candidate.
+
+Run deterministic replay only after the checklist has been reviewed and approved:
+
+```bash
+uv run --frozen pytest tests/test_m2_acceptance.py -q \
+  --corpus-dir=@local \
+  --m2-checklist-dir=tests/m2-acceptance.local \
+  --m2-replay-dir=tests/m2-replay.local
+```
+
+The live gate is separately opt-in and validates ordered structural coverage and model-call budgets,
+not exact model wording:
+
+```bash
+OPENDOCS_VISION_MODEL=<provider/model> \
+OPENDOCS_VISION_API_KEY=<secret> \
+uv run --frozen pytest tests/test_m2_acceptance.py -q \
+  --corpus-dir=@local \
+  --m2-checklist-dir=tests/m2-acceptance.local \
+  --m2-live
+```
+
+Keep completed checklists, derived anchors, replay/model output, and credentials outside Git.
+`tests/m2-acceptance.local/` and `tests/m2-replay.local/` are explicitly ignored. A missing or
+unapproved checklist is a gate failure; tests and tools must never regenerate or approve it merely
+to make acceptance pass.
 
 ## Test-first workflow
 

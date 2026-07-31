@@ -77,6 +77,28 @@ def _bbox(value: object) -> BBox | None:
     return BBox(left, top, right, bottom).require_normalized()
 
 
+def _json_object_instruction(request: VisionRequest) -> str:
+    bbox_rule = (
+        '"bbox" must be a normalized [left, top, right, bottom] array.'
+        if request.coordinate_space is not None
+        else '"bbox" may be omitted.'
+    )
+    table_rule = (
+        "Include at least one table element."
+        if request.kind is VisionRequestKind.TABLE
+        else "Use the element type that matches the visible content."
+    )
+    return (
+        'Return JSON with exactly one top-level key, "elements". '
+        "Each element must be either "
+        '{"type": "text", "text": "...", '
+        f'"source_index": {request.source_index}}} or '
+        '{"type": "table", "grid": [["..."]], "header_rows": 0, '
+        f'"source_index": {request.source_index}}}. '
+        f"{bbox_rule} {table_rule} Do not use any other top-level keys."
+    )
+
+
 def _parse_result(content: str, request: VisionRequest, *, allow_markdown: bool) -> VisionResult:
     try:
         payload = json.loads(content)
@@ -84,6 +106,17 @@ def _parse_result(content: str, request: VisionRequest, *, allow_markdown: bool)
         if allow_markdown and content and not content.lstrip().startswith(("{", "[", "```")):
             return VisionResult((VisionTextElement(content, request.source_index),))
         raise ValueError("response is not valid JSON") from None
+    if (
+        isinstance(payload, dict)
+        and set(payload) in ({"text"}, {"content"})
+        and not request.structured_required
+        and request.coordinate_space is None
+    ):
+        text = next(iter(payload.values()))
+        if isinstance(text, list) and all(isinstance(item, str) for item in text):
+            text = "\n".join(cast(list[str], text))
+        if isinstance(text, str):
+            return VisionResult((VisionTextElement(text, request.source_index),))
     if not isinstance(payload, dict) or set(payload) != {"elements"}:
         raise ValueError("response must contain only elements")
     raw_elements = payload["elements"]
@@ -230,7 +263,7 @@ class LiteLLMVisionClient:
                 failure = "vision capability probe failed"
             if failure is not None:
                 raise ModelUnavailableError(failure)
-            if vision is False:
+            if vision is False and self._config.api_base is None:
                 raise ModelInvalidRequestError("configured model does not support vision")
             self._mode = (
                 _ResponseMode.STRICT_SCHEMA
@@ -271,6 +304,8 @@ class LiteLLMVisionClient:
             if repair_payload is not None
             else request.prompt
         )
+        if mode is _ResponseMode.JSON_OBJECT:
+            prompt = f"{prompt.rstrip()}\n{_json_object_instruction(request)}"
         content: list[dict[str, object]] = [
             {"type": "text", "text": prompt},
             {"type": "image_url", "image_url": {"url": image_url}},

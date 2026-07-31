@@ -7,10 +7,19 @@ import pytest
 from opendocs import LimitExceededError, NoUsableContentError
 from opendocs._models import (
     DocumentType,
+    HardPageBreakBlock,
+    HeadingBlock,
+    InlineLink,
+    InlineText,
+    ListItemBlock,
+    ListKind,
     MarkdownBlock,
     PageBreakBlock,
+    ParagraphBlock,
     ParsedDocument,
     RenderResult,
+    SpannedTableBlock,
+    SpannedTableCell,
     TableBlock,
     TextBlock,
     WarningRecord,
@@ -209,3 +218,127 @@ def test_render_markdown_requires_max_output_chars_keyword_argument() -> None:
 
     with pytest.raises(TypeError, match="max_output_chars"):
         cast(Any, render_markdown)(document)
+
+
+def test_render_markdown_renders_structured_office_blocks() -> None:
+    document = ParsedDocument(
+        document_type=DocumentType.DOCX,
+        blocks=(
+            HeadingBlock(7, (InlineText("Roadmap"),)),
+            ParagraphBlock(
+                (
+                    InlineText("See "),
+                    InlineLink("docs", "https://example.com/a(b)"),
+                    InlineText(" or "),
+                    InlineLink("mail", "mailto:team@example.com"),
+                    InlineText(" and "),
+                    InlineLink("jump", "#section"),
+                    InlineText(".\nNext line."),
+                )
+            ),
+            ListItemBlock(1, 0, ListKind.BULLET, 1, (InlineText("alpha"),)),
+            ListItemBlock(1, 1, ListKind.ORDERED, 3, (InlineText("beta\ngamma"),)),
+            ListItemBlock(2, 0, ListKind.ORDERED, 1, (InlineText("restart"),)),
+            HardPageBreakBlock(),
+            SpannedTableBlock(
+                row_count=2,
+                column_count=3,
+                cells=(
+                    SpannedTableCell(0, 0, 1, 2, "A|B"),
+                    SpannedTableCell(0, 2, 1, 1, "C"),
+                    SpannedTableCell(1, 0, 1, 1, "<x>"),
+                    SpannedTableCell(1, 1, 1, 2, '"quoted"\n& value'),
+                ),
+                header_rows=1,
+            ),
+        ),
+    )
+
+    result = render_markdown(document, max_output_chars=400_000)
+
+    assert result == RenderResult(
+        markdown=(
+            "###### Roadmap\n\n"
+            "See [docs](https://example.com/a\\(b\\)) or [mail](mailto:team@example.com) "
+            "and [jump](#section).\nNext line.\n\n"
+            "- alpha\n"
+            "  3. beta\n"
+            "     gamma\n"
+            "1. restart\n\n"
+            "<!-- page-break -->\n\n"
+            '<table>\n<thead>\n<tr><th colspan="2">A|B</th><th>C</th></tr>\n'
+            "</thead>\n<tbody>\n<tr><td>&lt;x&gt;</td>"
+            '<td colspan="2">&quot;quoted&quot;<br>&amp; value</td></tr>\n'
+            "</tbody>\n</table>\n"
+        )
+    )
+
+
+def test_render_markdown_downgrades_unsafe_links_to_text_with_warning() -> None:
+    document = ParsedDocument(
+        document_type=DocumentType.DOCX,
+        blocks=(
+            ParagraphBlock(
+                (
+                    InlineText("open "),
+                    InlineLink("bad", "javascript:alert(1)"),
+                    InlineText(" then "),
+                    InlineLink("worse", "data:text/plain,hello"),
+                )
+            ),
+        ),
+    )
+
+    result = render_markdown(document, max_output_chars=400_000)
+
+    assert result.markdown == "open bad then worse\n"
+    assert result.warnings == (
+        WarningRecord(
+            code="unsafe_link_target",
+            message="rendered plain text for unsupported link target: javascript:alert(1)",
+        ),
+        WarningRecord(
+            code="unsafe_link_target",
+            message="rendered plain text for unsupported link target: data:text/plain,hello",
+        ),
+    )
+
+
+def test_render_markdown_truncates_only_between_complete_list_items() -> None:
+    document = ParsedDocument(
+        document_type=DocumentType.DOCX,
+        blocks=(
+            ListItemBlock(1, 0, ListKind.BULLET, 1, (InlineText("one"),)),
+            ListItemBlock(1, 0, ListKind.BULLET, 2, (InlineText("two"),)),
+            ParagraphBlock((InlineText("tail"),)),
+        ),
+    )
+
+    result = render_markdown(document, max_output_chars=6)
+
+    assert result.markdown == "- one\n"
+    assert result.warnings == (
+        WarningRecord(
+            code="output_truncated",
+            message="output stopped before block 2",
+        ),
+    )
+
+
+@pytest.mark.parametrize(
+    "blocks",
+    [
+        (ParagraphBlock((InlineText(""),)),),
+        (HardPageBreakBlock(), SpannedTableBlock(1, 1, (SpannedTableCell(0, 0, 1, 1, ""),), 0)),
+    ],
+)
+def test_render_markdown_treats_empty_office_structures_as_not_usable(
+    blocks: tuple[Any, ...],
+) -> None:
+    document = ParsedDocument(
+        document_type=DocumentType.DOCX,
+        blocks=blocks,
+    )
+
+    with pytest.raises(NoUsableContentError, match="no usable content"):
+        render_markdown(document, max_output_chars=400_000)
