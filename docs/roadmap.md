@@ -45,8 +45,8 @@ Exit criteria:
 
 ## M2 - Office
 
-Status: implementation complete; public verification is available, and milestone acceptance is
-pending a maintainer-approved local checklist.
+Status: accepted; public verification is available, and the maintainer-approved local checklist,
+deterministic replay, and live provider gates pass against the hash-bound acceptance assets.
 
 Implementation architecture:
 [M2 Office Architecture and Implementation Plan](archive/m2/2026-07-29-m2-office-architecture.md).
@@ -69,8 +69,8 @@ Exit criteria:
 
 ## M3 - Quality and Public Release
 
-Status: repository implementation complete through T09; milestone release acceptance remains
-blocked on the maintainer-owned M2 approval, private tuning/holdout evidence, Trusted Publisher
+Status: repository implementation complete through T09 and the M2 prerequisite is closed;
+milestone release acceptance remains blocked on private tuning/holdout evidence, Trusted Publisher
 configuration, public publication, cross-platform public-index smoke, and the `v0.1.0` tag/Release.
 
 Release architecture:
@@ -96,8 +96,9 @@ Implemented repository evidence:
   and native isolated-install smoke tooling
 - Ubuntu/macOS Python 3.11-3.13 CI, independent consumer example, and tag-only OIDC release workflow
 
-The repository does not contain a completed `v0.1.0-evidence.md`, a maintainer approval, a public
-package, or a release tag. Those are exit evidence, not values implementation may synthesize.
+The repository does not contain a completed `v0.1.0-evidence.md`, a public package, or a release
+tag. The completed M2 approval remains an ignored local artifact, as required by the private
+acceptance contract; release evidence is not a value implementation may synthesize.
 
 Exit criteria:
 

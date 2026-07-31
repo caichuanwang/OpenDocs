@@ -1,7 +1,6 @@
 # M3 Alpha Release Detailed Implementation Plan
 
-Status: T01-T09 repository work implemented; T00 private approval and T10-T12 external release
-execution pending
+Status: T00-T09 complete; T10-T12 private evidence and external release execution pending
 Date: 2026-07-31
 Architecture: `docs/plans/2026-07-31-m3-alpha-release-architecture.md`
 
@@ -636,7 +635,7 @@ and artifact set. M3 is complete.
 
 ## Final Verification Checklist
 
-- [ ] M2 checklist approved and required private M2 gates pass.
+- [x] M2 checklist approved and required private M2 gates pass.
 - [ ] Public suite, lint, format, types, build, and artifact checks pass.
 - [ ] PDF/image split is 30 tuning and 30 independent holdout pages across six categories.
 - [ ] Office split contains two tuning and two independent holdout documents.
