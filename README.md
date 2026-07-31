@@ -1,11 +1,13 @@
 # OpenDocs
 
-OpenDocs is a Python SDK that converts caller-provided local documents into Markdown. M2 supports
+OpenDocs is a Python SDK that converts caller-provided local documents into Markdown. The `0.1.0`
+Alpha release candidate supports
 TXT, Markdown, standalone images, native/hybrid/visual PDF parsing, and native DOCX/PPTX extraction
 through stable sync/async APIs.
 
 The Python distribution name is `opendocs-sdk`, while the import package remains `opendocs`.
-OpenDocs has not been published to PyPI yet; install from a checkout until a release is announced.
+The public release gate has not completed yet; install from a checkout or a locally built artifact
+until `opendocs-sdk==0.1.0` is verifiably available on public PyPI.
 
 ## Install from an existing checkout
 
@@ -90,6 +92,11 @@ request, temporary unavailability, and invalid response failures use distinct ty
 `ParseOptions` bounds the document timeout, PPTX/PDF page count, complete-block output size, and
 visual concurrency.
 
+`ParseOptions.vision_concurrency` limits visual requests within one parse. Applications control
+cross-document concurrency themselves, for example with an `asyncio.Semaphore`; see the
+[independent consumer example](examples/basic_consumer/README.md). OpenDocs does not provide a
+process-wide semaphore, model-call/token/currency cap, or performance SLA.
+
 DOCX extraction preserves authored body paragraphs, headings, lists, safe links, tables, merged
 cells, explicit page breaks, and inline raster-image positions. A DOCX remains one continuous
 logical flow; `max_pages` does not infer physical Word pages. PPTX extraction emits every slide
@@ -107,6 +114,9 @@ once per parse and replayed at every authored slot.
 | PNG / JPEG / WebP | Available | Static images only; sanitized before the configured vision model sees them |
 | DOCX | Available | Continuous authored body flow with structured text, lists, links, tables, explicit breaks, and inline images |
 | PPTX | Available | Slide and shape-tree order with text, tables, accessible charts, groups, and inline images |
+
+The release-blocking platform matrix is Ubuntu and macOS on Python 3.11, 3.12, and 3.13, with
+Poppler installed. Windows is unverified for `0.1.0` and is not claimed as supported or broken.
 
 OpenDocs never downloads HTTP, OSS, or S3 URLs, including Office hyperlink targets and external
 relationships. Model calls may send sanitized images to the provider selected by `VisionConfig`;

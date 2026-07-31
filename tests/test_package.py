@@ -3,8 +3,12 @@ import os
 import shutil
 import subprocess
 import sys
+from dataclasses import fields
 from importlib.metadata import metadata
+from importlib.resources import files
+from inspect import Parameter, signature
 from pathlib import Path
+from typing import get_type_hints
 
 from packaging.requirements import Requirement
 from packaging.specifiers import SpecifierSet
@@ -46,11 +50,26 @@ def test_package_public_all_stays_stable() -> None:
     assert opendocs.__all__ == EXPECTED_PUBLIC_ALL
 
 
+def test_package_includes_the_typing_marker() -> None:
+    assert files("opendocs").joinpath("py.typed").is_file()
+
+
 def test_distribution_uses_unambiguous_pypi_name() -> None:
     distribution = metadata("opendocs-sdk")
 
     assert distribution["Name"] == "opendocs-sdk"
     assert distribution["Version"] == opendocs.__version__
+
+
+def test_distribution_declares_the_accepted_alpha_metadata() -> None:
+    distribution = metadata("opendocs-sdk")
+    classifiers = distribution.get_all("Classifier") or []
+
+    assert distribution["Requires-Python"] == ">=3.11"
+    assert distribution["License-Expression"] == "MIT"
+    assert "Development Status :: 3 - Alpha" in classifiers
+    assert not any("Microsoft :: Windows" in classifier for classifier in classifiers)
+    assert not any(classifier.startswith("Development Status :: 5") for classifier in classifiers)
 
 
 def test_distribution_declares_locked_m1_runtime_dependency_ranges() -> None:
@@ -65,6 +84,43 @@ def test_distribution_declares_locked_m1_runtime_dependency_ranges() -> None:
     assert requirements["litellm"].specifier == SpecifierSet(">=1.93,<2")
     assert requirements["python-docx"].specifier == SpecifierSet(">=1.1.2,<2")
     assert requirements["python-pptx"].specifier == SpecifierSet(">=1.0.2,<2")
+
+
+def test_public_parse_contracts_stay_compatible_for_the_alpha_line() -> None:
+    expected_parameters = {
+        "source": (Parameter.POSITIONAL_OR_KEYWORD, Parameter.empty),
+        "options": (Parameter.KEYWORD_ONLY, None),
+        "vision": (Parameter.KEYWORD_ONLY, None),
+    }
+
+    for function in (opendocs.parse, opendocs.aparse):
+        parameters = signature(function).parameters
+        assert {
+            name: (parameter.kind, parameter.default) for name, parameter in parameters.items()
+        } == expected_parameters
+        assert get_type_hints(function)["return"] is str
+
+
+def test_public_options_keep_the_accepted_defaults_and_no_global_caps() -> None:
+    options = opendocs.ParseOptions()
+
+    assert options.timeout == 900
+    assert options.max_pages == 300
+    assert options.max_output_chars == 400_000
+    assert options.vision_concurrency == 4
+    assert opendocs.VisionConfig(model="test").timeout == 120
+    assert opendocs.VisionConfig(model="test").max_retries == 2
+
+    forbidden_fields = {
+        "global_semaphore",
+        "max_vision_calls",
+        "max_model_calls",
+        "max_tokens",
+        "max_cost",
+        "max_currency",
+    }
+    assert forbidden_fields.isdisjoint(field.name for field in fields(opendocs.ParseOptions))
+    assert forbidden_fields.isdisjoint(field.name for field in fields(opendocs.VisionConfig))
 
 
 def test_built_wheel_imports_office_dependencies_from_an_isolated_path(

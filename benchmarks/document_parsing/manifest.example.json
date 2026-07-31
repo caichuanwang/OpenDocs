@@ -1,0 +1,98 @@
+{
+  "schema_version": 1,
+  "policy_version": "0.1",
+  "items": [
+    {
+      "item_id": "replace-tuning-pdf-page",
+      "format": "pdf_page",
+      "split": "tuning",
+      "category": "native_text",
+      "source": {
+        "source_id": "replace-tuning-pdf-source",
+        "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+        "path": "replace/private/tuning.pdf"
+      },
+      "content_sha256": "0000000000000000000000000000000000000000000000000000000000000001",
+      "page_number": 1,
+      "annotation": {
+        "ref": "replace/private/annotations/tuning-page.json",
+        "sha256": "0000000000000000000000000000000000000000000000000000000000000002"
+      },
+      "contamination": {
+        "inspected": false,
+        "used_for_threshold_calibration": false,
+        "used_for_prompt_or_code_tuning": false
+      },
+      "real_document": false
+    },
+    {
+      "item_id": "replace-holdout-image",
+      "format": "image",
+      "split": "holdout",
+      "category": "visual_content",
+      "source": {
+        "source_id": "replace-holdout-image-source",
+        "sha256": "0000000000000000000000000000000000000000000000000000000000000010",
+        "path": "replace/private/holdout.png"
+      },
+      "content_sha256": "0000000000000000000000000000000000000000000000000000000000000011",
+      "page_number": 1,
+      "annotation": {
+        "ref": "replace/private/annotations/holdout-image.json",
+        "sha256": "0000000000000000000000000000000000000000000000000000000000000012"
+      },
+      "contamination": {
+        "inspected": false,
+        "used_for_threshold_calibration": false,
+        "used_for_prompt_or_code_tuning": false
+      },
+      "real_document": false
+    },
+    {
+      "item_id": "replace-tuning-docx",
+      "format": "docx",
+      "split": "tuning",
+      "category": null,
+      "source": {
+        "source_id": "replace-tuning-docx-source",
+        "sha256": "0000000000000000000000000000000000000000000000000000000000000020",
+        "path": "replace/private/tuning.docx"
+      },
+      "content_sha256": "0000000000000000000000000000000000000000000000000000000000000021",
+      "page_number": null,
+      "annotation": {
+        "ref": "replace/private/annotations/tuning-docx.json",
+        "sha256": "0000000000000000000000000000000000000000000000000000000000000022"
+      },
+      "contamination": {
+        "inspected": false,
+        "used_for_threshold_calibration": false,
+        "used_for_prompt_or_code_tuning": false
+      },
+      "real_document": true
+    },
+    {
+      "item_id": "replace-holdout-pptx",
+      "format": "pptx",
+      "split": "holdout",
+      "category": null,
+      "source": {
+        "source_id": "replace-holdout-pptx-source",
+        "sha256": "0000000000000000000000000000000000000000000000000000000000000030",
+        "path": "replace/private/holdout.pptx"
+      },
+      "content_sha256": "0000000000000000000000000000000000000000000000000000000000000031",
+      "page_number": null,
+      "annotation": {
+        "ref": "replace/private/annotations/holdout-pptx.json",
+        "sha256": "0000000000000000000000000000000000000000000000000000000000000032"
+      },
+      "contamination": {
+        "inspected": false,
+        "used_for_threshold_calibration": false,
+        "used_for_prompt_or_code_tuning": false
+      },
+      "real_document": true
+    }
+  ]
+}

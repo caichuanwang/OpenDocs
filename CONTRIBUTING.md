@@ -25,6 +25,7 @@ uv run --frozen ruff check .
 uv run --frozen ruff format --check .
 uv run --frozen ty check src tests
 rm -rf dist && uv build
+uv run --frozen python scripts/check_release_artifacts.py dist
 git diff --check
 ```
 
@@ -33,7 +34,7 @@ Expected public result:
 - `pytest` passes with the private-corpus and M1/M2 replay/live gates skipped when their explicit
   options are not provided
 - Ruff, formatting, ty, and build exit `0`
-- `dist/` contains a wheel and source distribution and remains ignored
+- `dist/` contains one checked wheel, one checked source distribution, and `SHA256SUMS`
 
 ## Isolated wheel verification
 
@@ -64,6 +65,27 @@ Expected result:
 - the shell cleanup trap removes only the `mktemp -d` directory created for this verification
 - `parse`, `aparse`, `ParseOptions`, and `VisionConfig` import from the installed wheel
 - sync and async hello smoke assertions both exit `0`
+
+For the full native release smoke, run the repository-only script from an environment containing
+the installed artifact:
+
+```bash
+python scripts/release_smoke.py ./smoke-workspace --version 0.1.0
+```
+
+It covers TXT, Markdown, native PDF, DOCX, PPTX, and async parsing without a `VisionConfig`, so it
+does not contact or charge a model provider.
+
+## M3 release evidence
+
+The public benchmark policy lives under `benchmarks/document_parsing/`. Private documents,
+annotations, replay data, provider payloads, raw Markdown, and run workspaces remain ignored.
+Quality execution follows `tuning -> freeze -> holdout`; holdout refuses any changed candidate,
+policy, manifest, evaluator, model, replay, or environment identity.
+
+Application-level document concurrency belongs to the caller and should use an
+`asyncio.Semaphore`. `ParseOptions.vision_concurrency` remains a separate, per-document limit.
+Resource evidence is observational and does not define a performance SLA.
 
 ## Architectural boundary scans
 

@@ -1,6 +1,6 @@
 # M3 Alpha Release Architecture
 
-Status: accepted plan; implementation not started
+Status: repository architecture implemented; private evidence and public release execution pending
 Date: 2026-07-31
 Scope: release evidence, independent quality holdout, supported-platform CI, packaging, and the
 first public Alpha release

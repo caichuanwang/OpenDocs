@@ -12,6 +12,7 @@ license = "MIT"
 license-files = ["LICENSE"]
 authors = [{ name = "OpenDocs contributors" }]
 classifiers = [
+  "Development Status :: 3 - Alpha",
   "License :: OSI Approved :: MIT License",
   "Programming Language :: Python :: 3",
   "Programming Language :: Python :: 3.11",
@@ -40,6 +41,22 @@ dev = [
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/opendocs"]
+
+[tool.hatch.build.targets.sdist]
+exclude = [
+  "/.github",
+  "/.omx",
+  "/.serena",
+  "/AGENTS.md",
+  "/benchmarks/document_parsing/manifest.local.json",
+  "/benchmarks/document_parsing/private",
+  "/benchmarks/document_parsing/runs",
+  "/tests/corpus",
+  "/tests/corpus.local.toml",
+  "/tests/m1-replay.local",
+  "/tests/m2-acceptance.local",
+  "/tests/m2-replay.local",
+]
 
 [tool.pytest.ini_options]
 addopts = ["--strict-config", "--strict-markers"]

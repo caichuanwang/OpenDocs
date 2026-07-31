@@ -69,7 +69,9 @@ Exit criteria:
 
 ## M3 - Quality and Public Release
 
-Status: accepted plan; implementation not started.
+Status: repository implementation complete through T09; milestone release acceptance remains
+blocked on the maintainer-owned M2 approval, private tuning/holdout evidence, Trusted Publisher
+configuration, public publication, cross-platform public-index smoke, and the `v0.1.0` tag/Release.
 
 Release architecture:
 [M3 Alpha Release Architecture](plans/2026-07-31-m3-alpha-release-architecture.md).
@@ -85,6 +87,17 @@ Summary:
 - verify CPython 3.11-3.13 on Ubuntu and macOS with Poppler
 - publish `opendocs-sdk==0.1.0` as the first public Alpha through Trusted Publishing
 - provide release notes, safe aggregate evidence, and an independent PyPI consumer example
+
+Implemented repository evidence:
+
+- strict benchmark policy/manifest validation, contamination transitions, quality/Office
+  evaluators, freeze/holdout runner, safe evidence renderer, and resource probe
+- Alpha metadata, compatibility tests, typing marker, wheel/sdist inspection, SHA-256 checksums,
+  and native isolated-install smoke tooling
+- Ubuntu/macOS Python 3.11-3.13 CI, independent consumer example, and tag-only OIDC release workflow
+
+The repository does not contain a completed `v0.1.0-evidence.md`, a maintainer approval, a public
+package, or a release tag. Those are exit evidence, not values implementation may synthesize.
 
 Exit criteria:
 

@@ -1,0 +1,43 @@
+{
+  "schema_version": 1,
+  "policy_version": "0.1",
+  "categories": [
+    "native_text",
+    "scanned_text",
+    "native_table",
+    "visual_table",
+    "visual_content",
+    "mixed"
+  ],
+  "split_requirements": {
+    "pdf_image_items_per_split": 30,
+    "minimum_per_category": 5,
+    "office_documents_per_format": 1
+  },
+  "quality": {
+    "unresolved_handling": "fail",
+    "metrics": {
+      "native_text_accuracy": {
+        "minimum": 0.95
+      },
+      "scanned_text_accuracy": {
+        "minimum": 0.85
+      },
+      "native_table_cell_accuracy": {
+        "minimum": 0.95
+      },
+      "visual_table_cell_accuracy": {
+        "minimum": 0.85
+      },
+      "visual_content_recall": {
+        "minimum": 0.85
+      },
+      "visual_content_precision": {
+        "minimum": 0.85
+      },
+      "native_visual_call_rate": {
+        "maximum": 0.05
+      }
+    }
+  }
+}

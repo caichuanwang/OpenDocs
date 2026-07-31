@@ -5,10 +5,11 @@ Use this page as the documentation entry point.
 ## Current Work
 
 - [Roadmap](roadmap.md) - milestone status and release sequence.
-- [M3 Alpha Release Architecture](plans/2026-07-31-m3-alpha-release-architecture.md) - accepted
-  product, quality, platform, and publishing contract.
+- [M3 Alpha Release Architecture](plans/2026-07-31-m3-alpha-release-architecture.md) - implemented
+  repository contract with external release gates still pending.
 - [M3 Alpha Release Detailed Implementation Plan](plans/2026-07-31-m3-alpha-release-implementation.md)
-  - active task sequence and verification gates.
+  - implemented T01-T09 sequence and pending T10-T12 release gates.
+- [Release runbook](releases/README.md) - Trusted Publisher bindings and irreversible release order.
 
 ## Historical Records
 
@@ -28,4 +29,3 @@ When documents disagree, use this order:
 2. `docs/roadmap.md` for milestone status;
 3. plans under `docs/plans/` for active work;
 4. documents under `docs/archive/` for historical rationale only.
-

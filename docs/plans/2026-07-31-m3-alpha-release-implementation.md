@@ -1,6 +1,7 @@
 # M3 Alpha Release Detailed Implementation Plan
 
-Status: accepted plan; implementation not started
+Status: T01-T09 repository work implemented; T00 private approval and T10-T12 external release
+execution pending
 Date: 2026-07-31
 Architecture: `docs/plans/2026-07-31-m3-alpha-release-architecture.md`
 

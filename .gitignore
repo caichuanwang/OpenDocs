@@ -224,6 +224,9 @@ tests/corpus.local.toml
 tests/m1-replay.local/
 tests/m2-acceptance.local/
 tests/m2-replay.local/
+benchmarks/document_parsing/private/
+benchmarks/document_parsing/runs/
+benchmarks/document_parsing/manifest.local.json
 
 .pi-subagents
 .codex

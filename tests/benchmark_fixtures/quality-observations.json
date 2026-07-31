@@ -1,0 +1,22 @@
+{
+  "schema_version": 1,
+  "description": "Synthetic counts only; no source or extracted content.",
+  "observations": [
+    {
+      "item_id": "synthetic-native-text",
+      "category": "native_text",
+      "metric": "native_text_accuracy",
+      "numerator": 9,
+      "denominator": 10,
+      "unresolved": false
+    },
+    {
+      "item_id": "synthetic-visual-content",
+      "category": "visual_content",
+      "metric": "visual_content_recall",
+      "numerator": 8,
+      "denominator": 10,
+      "unresolved": false
+    }
+  ]
+}
