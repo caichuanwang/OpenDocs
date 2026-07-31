@@ -406,6 +406,8 @@ def write_candidate(
             f"call_budget = {docx.call_budget}",
         ]
     )
+    if not docx.tables:
+        lines.append("tables = []")
     for table in docx.tables:
         lines.extend(
             [

@@ -201,6 +201,23 @@ def test_candidate_never_approves_or_overwrites(tmp_path: Path) -> None:
         write_candidate(checklist_dir, entries, _derived(entries))
 
 
+def test_candidate_preserves_empty_docx_table_evidence(tmp_path: Path) -> None:
+    entries = _entries()
+    checklist_dir = tmp_path / "checklist"
+    derived = _derived(entries)
+    docx = cast(dict[str, object], derived["docx"])
+    docx["tables"] = []
+
+    write_candidate(checklist_dir, entries, derived)
+    path = checklist_dir / "checklist.toml"
+    path.write_text(
+        path.read_text(encoding="utf-8").replace("approved = false", "approved = true"),
+        encoding="utf-8",
+    )
+
+    assert load_checklist(checklist_dir, entries).docx.tables == ()
+
+
 def test_replay_requires_exact_order_count_hash_and_repeat_output(tmp_path: Path) -> None:
     entries = _entries()
     replay_dir = tmp_path / "replay"
