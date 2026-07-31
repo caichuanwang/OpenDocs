@@ -1,8 +1,12 @@
 # M2 Office Detailed Implementation Plan
 
-Status: public implementation and acceptance infrastructure complete; private approval pending
+> Archived execution record. Public implementation and acceptance infrastructure are complete;
+> private maintainer approval remains a prerequisite for M3 release work.
+
+Status: archived; public implementation and acceptance infrastructure complete; private approval
+pending
 Date: 2026-07-29
-Architecture: `docs/plans/2026-07-29-m2-office-architecture.md`
+Architecture: `docs/archive/m2/2026-07-29-m2-office-architecture.md`
 
 Progress verified on 2026-07-31:
 

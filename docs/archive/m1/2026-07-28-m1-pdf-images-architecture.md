@@ -1,9 +1,12 @@
 # M1 PDF and Images Architecture Plan
 
-Status: implementation-ready architecture plan
+> Archived milestone plan. M1 is implemented; current behavior is defined by the source, tests, and
+> roadmap.
+
+Status: archived; implementation complete
 Scope: PNG/JPEG/WebP, PDF native/hybrid/full-vision/blank routing, internal vision adapter
 Depends on: completed M0 foundation and the accepted design in
-`docs/superpowers/specs/2026-07-27-opendocs-foundation-and-roadmap-design.md`
+`docs/archive/m0/2026-07-27-opendocs-foundation-and-roadmap-design.md`
 
 ## Objective and Exit Contract
 
@@ -402,7 +405,8 @@ these changes:
 
 ## References
 
-- Accepted project design: `docs/superpowers/specs/2026-07-27-opendocs-foundation-and-roadmap-design.md`
+- Accepted project design:
+  `docs/archive/m0/2026-07-27-opendocs-foundation-and-roadmap-design.md`
 - Roadmap: `docs/roadmap.md`
 - Pillow `Image.verify()` and `ImageOps.exif_transpose()` documentation
 - pdfplumber README/API: text, tables, page objects, and explicit lack of OCR

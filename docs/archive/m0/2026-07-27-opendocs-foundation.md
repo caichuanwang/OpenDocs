@@ -1,5 +1,9 @@
 # OpenDocs M0 Foundation Implementation Plan
 
+> Archived implementation record. This Superpowers-generated plan contains M0-era code snapshots,
+> commands, and task sequencing. Do not use it as a current runbook; use the source, tests,
+> contributor guide, and active milestone plan instead.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Deliver an installable Python 3.11+ SDK whose `parse()` and `aparse()` APIs convert TXT and Markdown inputs from local paths, bytes, and binary streams into deterministic Markdown.
@@ -12,7 +16,8 @@
 
 ## Scope Guardrails
 
-- The accepted design is `docs/superpowers/specs/2026-07-27-opendocs-foundation-and-roadmap-design.md`.
+- The accepted design is
+  `docs/archive/m0/2026-07-27-opendocs-foundation-and-roadmap-design.md`.
 - `str` always means a local filesystem path. It never means document contents or a downloadable URL.
 - Public calls return only `str` Markdown. Private dataclasses may change before the Node.js milestone.
 - M0 detects planned formats but registers parsers only for TXT and Markdown. A detected PDF, image,

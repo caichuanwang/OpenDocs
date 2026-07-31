@@ -139,7 +139,7 @@ except OpenDocsError as error:
 
 ## Project docs
 
-- [Architecture design](docs/superpowers/specs/2026-07-27-opendocs-foundation-and-roadmap-design.md)
+- [Documentation](docs/README.md)
 - [Roadmap](docs/roadmap.md)
 - [Contributing](CONTRIBUTING.md)
 - [License](LICENSE)

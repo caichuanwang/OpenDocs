@@ -1,5 +1,8 @@
 # OpenDocs Foundation and Roadmap Design
 
+> Archived decision record. This document preserves the original foundation and roadmap rationale.
+> The current source, tests, and `docs/roadmap.md` are authoritative where the project has evolved.
+
 **Status:** Accepted
 **Date:** 2026-07-27
 

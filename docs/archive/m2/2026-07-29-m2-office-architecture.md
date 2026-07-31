@@ -1,6 +1,9 @@
 # M2 Office Architecture and Implementation Plan
 
-Status: implementation complete; milestone acceptance pending maintainer approval
+> Archived milestone plan. The implementation is complete, but M2 acceptance still requires the
+> maintainer-approved local checklist described by the roadmap.
+
+Status: archived; implementation complete; milestone acceptance pending maintainer approval
 Date: 2026-07-29
 Scope: native DOCX/PPTX extraction, source-order Markdown, and embedded-image vision reuse
 
@@ -453,9 +456,9 @@ material changes:
 
 ## References
 
-- `docs/superpowers/specs/2026-07-27-opendocs-foundation-and-roadmap-design.md`
+- `docs/archive/m0/2026-07-27-opendocs-foundation-and-roadmap-design.md`
 - `docs/roadmap.md`
-- `docs/plans/2026-07-28-m1-pdf-images-architecture.md`
+- `docs/archive/m1/2026-07-28-m1-pdf-images-architecture.md`
 - local `43x-agent` DOCX/PPTX extractors, Office parser/common models, and focused tests
 - python-docx documentation and OOXML element APIs used by its object model
 - python-pptx documentation and OOXML element APIs used by its object model
