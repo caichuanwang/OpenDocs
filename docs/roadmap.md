@@ -69,10 +69,10 @@ Exit criteria:
 
 ## M3 - Quality and Public Release
 
-Status: repository implementation complete through T09; M2 and the independent DOCX/PPTX Alpha
-holdout are maintainer-accepted, and the PyPI/TestPyPI Trusted Publishers are configured. Release
-acceptance remains blocked on candidate evidence freeze, GitHub Environment configuration, public
-publication, cross-platform public-index smoke, and the `v0.1.0` tag/Release.
+Status: complete. `opendocs-sdk==0.1.0` was published as the first public Alpha on 2026-08-03
+through PyPI Trusted Publishing. The protected release workflow, TestPyPI rehearsal, production
+approval, Ubuntu/macOS public-index smoke, and GitHub tag/Release all passed against one immutable
+artifact set.
 
 Release architecture:
 [M3 Alpha Release Architecture](plans/2026-07-31-m3-alpha-release-architecture.md).
@@ -99,10 +99,14 @@ Implemented repository evidence:
   and native isolated-install smoke tooling
 - Ubuntu/macOS Python 3.11-3.13 CI, independent consumer example, and tag-only OIDC release workflow
 
-The repository does not yet contain a completed `v0.1.0-evidence.md`, a public package, or a
-release tag. The completed M2 approval and independent Office holdout results remain ignored local
-artifacts, as required by the private acceptance contract. The evidence file may record only safe
-aggregate pass/fail results and must explicitly identify unrun gates.
+The frozen [v0.1.0 evidence](releases/v0.1.0-evidence.md) identifies the accepted candidate and
+records only safe aggregate results. The completed M2 approval and independent Office holdout
+details remain ignored local artifacts, as required by the private acceptance contract. Public
+publication was verified by the successful
+[release workflow](https://github.com/caichuanwang/OpenDocs/actions/runs/30807658018), the
+[PyPI project](https://pypi.org/project/opendocs-sdk/0.1.0/), and the
+[GitHub Release](https://github.com/caichuanwang/OpenDocs/releases/tag/v0.1.0). The wheel and source
+distribution SHA-256 digests agree across PyPI, TestPyPI, and the GitHub Release assets.
 
 Scope decision for the first Alpha: the full 30/30 PDF/image tuning and independent holdout dataset
 is deferred and is not a `0.1.0` release blocker. This is an explicit evidence gap, not a passing

@@ -1,6 +1,6 @@
 # M3 Alpha Release Detailed Implementation Plan
 
-Status: T00-T09 complete; lean-Alpha T10-T12 release execution in progress
+Status: complete; T00-T12 accepted and `v0.1.0` released on 2026-08-03
 Date: 2026-07-31
 Architecture: `docs/plans/2026-07-31-m3-alpha-release-architecture.md`
 
@@ -659,19 +659,20 @@ and artifact set. M3 is complete.
 ## Final Verification Checklist
 
 - [x] M2 checklist approved and required private M2 gates pass.
-- [ ] Public suite, lint, format, types, build, and artifact checks pass.
+- [x] Public suite, lint, format, types, build, and artifact checks pass.
 - Deferred for `0.1.0`: PDF/image split of 30 tuning and 30 independent holdout pages.
 - [x] Office evidence includes the accepted M2 documents and an independent real DOCX/PPTX pair.
-- [ ] Safe evidence explicitly records the deferred PDF/image benchmark as not run.
+- [x] Safe evidence explicitly records the deferred PDF/image benchmark as not run.
 - [x] Maintainer review accepted the independent Office holdout without committing private output.
-- [ ] Resource/lifecycle gates pass without leaks or hidden global throttling.
-- [ ] Ubuntu/macOS Python 3.11-3.13 CI is green with Poppler.
-- [ ] Wheel and source distribution install independently and contain no prohibited artifacts.
-- [ ] External consumer passes against the artifact.
-- [ ] README, changelog, metadata, evidence, and roadmap use consistent Alpha claims.
-- [ ] TestPyPI rehearsal passes through Trusted Publishing.
-- [ ] Production publish requires the `pypi` Environment approval and uses no long-lived token.
-- [ ] Public PyPI exact-version smoke passes on Ubuntu and macOS.
-- [ ] Tag and GitHub Release `v0.1.0` match the published commit and artifact hashes.
-- [ ] No private documents, annotations, provider payloads, raw output, credentials, or
+- [x] Public resource/lifecycle regressions pass; the independent real-load benchmark remains
+  deferred and no performance SLA is claimed.
+- [x] Ubuntu/macOS Python 3.11-3.13 CI is green with Poppler.
+- [x] Wheel and source distribution install independently and contain no prohibited artifacts.
+- [x] External consumer passes against the artifact.
+- [x] README, changelog, metadata, evidence, and roadmap use consistent Alpha claims.
+- [x] TestPyPI rehearsal passes through Trusted Publishing.
+- [x] Production publication used the `pypi` Environment approval and no long-lived token.
+- [x] Public PyPI exact-version smoke passes on Ubuntu and macOS.
+- [x] Tag and GitHub Release `v0.1.0` match the published commit and artifact hashes.
+- [x] No private documents, annotations, provider payloads, raw output, credentials, or
   authorization record were committed.
