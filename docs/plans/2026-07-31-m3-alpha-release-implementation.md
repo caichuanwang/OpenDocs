@@ -1,8 +1,27 @@
 # M3 Alpha Release Detailed Implementation Plan
 
-Status: T00-T09 complete; T10-T12 private evidence and external release execution pending
+Status: T00-T09 complete; lean-Alpha T10-T12 release execution in progress
 Date: 2026-07-31
 Architecture: `docs/plans/2026-07-31-m3-alpha-release-architecture.md`
+
+## 0.1.0 Scope Decision - 2026-08-03
+
+The initial plan defined a 30-page PDF/image tuning split and a separate 30-page holdout split as a
+release blocker. For the first public Alpha, the maintainer selected a narrower, evidence-backed
+acceptance boundary:
+
+- the approved M2 checklist and replay/live gates remain mandatory;
+- one genuinely independent real DOCX and one real PPTX must be parsed through the SDK and reviewed
+  by the maintainer;
+- all public tests, lifecycle/resource regressions, static checks, package inspection, supported
+  platform CI, TestPyPI, public PyPI smoke, tag, and Release remain mandatory;
+- the full 30/30 PDF/image benchmark is deferred and must be recorded as not run, never rendered as
+  passing evidence.
+
+This decision narrows evidence coverage, not product claims: `0.1.0` remains Alpha, with no
+production-readiness, quality-coverage, cost, or performance-SLA claim. Earlier 30/30 sections are
+retained as the implemented benchmark framework and future quality-expansion procedure; this scope
+decision controls the `0.1.0` release checklist below.
 
 ## Requirements Summary
 
@@ -556,16 +575,19 @@ Steps:
    intended release changes.
 2. Run all public commands on the candidate.
 3. Run M2 approved acceptance.
-4. Run PDF/image tuning, freeze policy, then run the independent holdout.
-5. Run the real Office tuning documents and the unseen DOCX/PPTX holdout.
-6. Run accepted replay/live gates and the resource evaluator.
-7. Render and manually inspect the safe aggregate evidence.
+4. Run the real Office tuning documents and the unseen DOCX/PPTX holdout.
+5. Record the full 30/30 PDF/image benchmark as not run for this Alpha; do not synthesize quality
+   records or reuse Office evidence as a substitute.
+6. Run accepted replay/live gates and the public lifecycle/resource regressions.
+7. Write and manually inspect safe aggregate evidence containing both passing and unrun gates.
 8. Build once locally and run wheel/sdist isolation smokes on both supported platforms through CI.
 9. Search tracked changes and artifacts for prohibited paths/content and secrets without printing
    secret values.
 10. Record the candidate commit, version, policy/evaluator digests, artifact hashes, and CI run.
-11. Freeze the candidate. Any code, prompt, dependency, policy, or relevant documentation change
-    requires rerunning affected gates and producing new evidence.
+11. Commit code and documentation as the candidate, then add the version evidence in a second
+    evidence-only commit whose sole parent is that candidate.
+12. Freeze the pair. Any code, prompt, dependency, policy, or relevant documentation change
+    requires rerunning affected gates and producing a new evidence-only commit.
 
 Verification:
 
@@ -579,8 +601,8 @@ uv run --frozen python scripts/check_release_artifacts.py dist
 git diff --check
 ```
 
-Exit: every public/private gate passes against one identified candidate, with safe aggregate
-evidence ready for release.
+Exit: every blocking lean-Alpha gate passes against one identified candidate, and the safe
+aggregate evidence explicitly separates passing gates from the deferred PDF/image benchmark.
 
 ## T11 - Configure Trusted Publishers and Rehearse
 
@@ -589,16 +611,17 @@ Depends on: T09, T10.
 External configuration:
 
 1. Create/verify GitHub Environment `testpypi` for rehearsal.
-2. Create/verify GitHub Environment `pypi` with required manual approval.
-3. Keep the sole maintainer eligible to approve; do not enable prevent-self-review without a
-   second eligible reviewer.
+2. Create/verify GitHub Environment `pypi`; configure manual approval when the repository plan
+   supports it, otherwise treat explicit tag authorization as the irreversible release boundary.
+3. If a reviewer is configured, keep the sole maintainer eligible to approve and do not enable
+   prevent-self-review without a second eligible reviewer.
 4. Configure exact pending Trusted Publisher records on TestPyPI and PyPI:
    repository owner/name, workflow filename, and environment must match.
 5. Confirm `opendocs-sdk` remains available on public PyPI immediately before the first publish.
-6. Run a TestPyPI rehearsal from a non-production release candidate or workflow dispatch path that
-   cannot reach public PyPI.
-7. Install the rehearsed artifact in clean Ubuntu/macOS environments and run release smoke.
-8. Confirm attestations, metadata, and checksums are visible and match the candidate.
+6. Publish to TestPyPI as the first stage of the tag-only workflow; production PyPI must depend on
+   the successful exact-version TestPyPI install smoke.
+7. Confirm attestations, metadata, and checksums are visible and match the candidate before the
+   public publish stage runs.
 
 Do not add a long-lived `PYPI_TOKEN` fallback. A Trusted Publisher mismatch blocks release and must
 be corrected at the publisher/workflow binding.
@@ -637,10 +660,10 @@ and artifact set. M3 is complete.
 
 - [x] M2 checklist approved and required private M2 gates pass.
 - [ ] Public suite, lint, format, types, build, and artifact checks pass.
-- [ ] PDF/image split is 30 tuning and 30 independent holdout pages across six categories.
-- [ ] Office split contains two tuning and two independent holdout documents.
-- [ ] Threshold policy was frozen before holdout and not modified afterward.
-- [ ] Quality and Office structural gates pass with safe aggregate evidence.
+- Deferred for `0.1.0`: PDF/image split of 30 tuning and 30 independent holdout pages.
+- [x] Office evidence includes the accepted M2 documents and an independent real DOCX/PPTX pair.
+- [ ] Safe evidence explicitly records the deferred PDF/image benchmark as not run.
+- [x] Maintainer review accepted the independent Office holdout without committing private output.
 - [ ] Resource/lifecycle gates pass without leaks or hidden global throttling.
 - [ ] Ubuntu/macOS Python 3.11-3.13 CI is green with Poppler.
 - [ ] Wheel and source distribution install independently and contain no prohibited artifacts.

@@ -69,9 +69,10 @@ Exit criteria:
 
 ## M3 - Quality and Public Release
 
-Status: repository implementation complete through T09 and the M2 prerequisite is closed;
-milestone release acceptance remains blocked on private tuning/holdout evidence, Trusted Publisher
-configuration, public publication, cross-platform public-index smoke, and the `v0.1.0` tag/Release.
+Status: repository implementation complete through T09; M2 and the independent DOCX/PPTX Alpha
+holdout are maintainer-accepted, and the PyPI/TestPyPI Trusted Publishers are configured. Release
+acceptance remains blocked on candidate evidence freeze, GitHub Environment configuration, public
+publication, cross-platform public-index smoke, and the `v0.1.0` tag/Release.
 
 Release architecture:
 [M3 Alpha Release Architecture](plans/2026-07-31-m3-alpha-release-architecture.md).
@@ -82,7 +83,9 @@ Detailed execution plan:
 Summary:
 
 - close the maintainer-approved M2 acceptance gate before release
-- add a 30/30 PDF/image tuning and holdout process plus one unseen real DOCX and PPTX holdout
+- provide a strict 30/30 PDF/image benchmark process for later quality expansion without claiming
+  that dataset as completed for `0.1.0`
+- validate one genuinely independent real DOCX and PPTX as the lean Alpha holdout
 - expand cancellation, timeout, per-parse concurrency, dependency-boundary, and resource evidence
 - verify CPython 3.11-3.13 on Ubuntu and macOS with Poppler
 - publish `opendocs-sdk==0.1.0` as the first public Alpha through Trusted Publishing
@@ -96,14 +99,21 @@ Implemented repository evidence:
   and native isolated-install smoke tooling
 - Ubuntu/macOS Python 3.11-3.13 CI, independent consumer example, and tag-only OIDC release workflow
 
-The repository does not contain a completed `v0.1.0-evidence.md`, a public package, or a release
-tag. The completed M2 approval remains an ignored local artifact, as required by the private
-acceptance contract; release evidence is not a value implementation may synthesize.
+The repository does not yet contain a completed `v0.1.0-evidence.md`, a public package, or a
+release tag. The completed M2 approval and independent Office holdout results remain ignored local
+artifacts, as required by the private acceptance contract. The evidence file may record only safe
+aggregate pass/fail results and must explicitly identify unrun gates.
+
+Scope decision for the first Alpha: the full 30/30 PDF/image tuning and independent holdout dataset
+is deferred and is not a `0.1.0` release blocker. This is an explicit evidence gap, not a passing
+result. The release remains Alpha-only and makes no production-readiness, quality-coverage, cost,
+or performance-SLA claim.
 
 Exit criteria:
 
-- M2 approval and all public, tuning, independent holdout, and resource gates pass
-- tuning and holdout remain source-isolated; inspected holdout is replaced before release
+- M2 approval, public gates, and maintainer review of the independent real DOCX/PPTX holdout pass
+- private Office evidence remains source-isolated and only safe aggregate results are committed
+- the evidence file records that the full 30/30 PDF/image benchmark was not run for `0.1.0`
 - wheel and source distribution pass isolated installation checks on Ubuntu and macOS
 - public PyPI installation of `opendocs-sdk==0.1.0` passes on both supported operating systems
 - GitHub tag and Release `v0.1.0` identify the exact published source and artifacts

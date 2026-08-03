@@ -102,6 +102,17 @@ def test_release_workflow_is_tag_only_and_validates_source_identity() -> None:
     assert source.count("uv build") == 1
 
 
+def test_release_evidence_commit_only_adds_evidence_for_its_parent_candidate() -> None:
+    source = RELEASE_PATH.read_text(encoding="utf-8")
+
+    assert 'candidate_commit="$(git rev-parse "$GITHUB_SHA^")"' in source
+    assert "mapfile -t changed_paths < <(git diff-tree" in source
+    assert 'test "${#changed_paths[@]}" -eq 1' in source
+    assert 'test "${changed_paths[0]}" = "$evidence"' in source
+    assert 'grep -Fx "Candidate commit: $candidate_commit" "$evidence"' in source
+    assert 'grep -F "$GITHUB_SHA" "$evidence"' not in source
+
+
 def test_release_promotes_one_artifact_through_testpypi_pypi_and_release() -> None:
     jobs = _jobs(RELEASE_PATH)
     source = RELEASE_PATH.read_text(encoding="utf-8")

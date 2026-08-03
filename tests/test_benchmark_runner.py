@@ -145,6 +145,7 @@ def test_public_evidence_contains_only_safe_aggregates() -> None:
     rendered = render_release_evidence([_passing_record("tuning"), _passing_record("holdout")])
 
     assert "# OpenDocs v0.1.0 发布证据" in rendered
+    assert f"Candidate commit: {IDENTITY.candidate_commit}" in rendered
     assert IDENTITY.candidate_commit in rendered
     assert "tuning" in rendered
     assert "holdout" in rendered

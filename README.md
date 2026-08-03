@@ -1,13 +1,14 @@
 # OpenDocs
 
 OpenDocs is a Python SDK that converts caller-provided local documents into Markdown. The `0.1.0`
-Alpha release candidate supports
-TXT, Markdown, standalone images, native/hybrid/visual PDF parsing, and native DOCX/PPTX extraction
-through stable sync/async APIs.
+Alpha supports TXT, Markdown, standalone images, native/hybrid/visual PDF parsing, and native
+DOCX/PPTX extraction through stable sync/async APIs.
 
 The Python distribution name is `opendocs-sdk`, while the import package remains `opendocs`.
-The public release gate has not completed yet; install from a checkout or a locally built artifact
-until `opendocs-sdk==0.1.0` is verifiably available on public PyPI.
+
+```bash
+pip install opendocs-sdk==0.1.0
+```
 
 ## Install from an existing checkout
 

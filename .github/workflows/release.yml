@@ -36,10 +36,16 @@ jobs:
           test "$GITHUB_REF_NAME" = "v$package_version"
           git fetch --no-tags origin master
           git merge-base --is-ancestor "$GITHUB_SHA" origin/master
+          parent_count="$(git cat-file -p "$GITHUB_SHA" | grep -c '^parent ')"
+          test "$parent_count" -eq 1
+          candidate_commit="$(git rev-parse "$GITHUB_SHA^")"
           evidence="docs/releases/v${package_version}-evidence.md"
           test "$evidence" = "docs/releases/v0.1.0-evidence.md"
           test -f "$evidence"
-          grep -F "$GITHUB_SHA" "$evidence"
+          mapfile -t changed_paths < <(git diff-tree --no-commit-id --name-only -r "$GITHUB_SHA")
+          test "${#changed_paths[@]}" -eq 1
+          test "${changed_paths[0]}" = "$evidence"
+          grep -Fx "Candidate commit: $candidate_commit" "$evidence"
       - name: Run release gates
         run: |
           uv sync --all-groups --frozen

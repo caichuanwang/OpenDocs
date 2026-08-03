@@ -4,7 +4,7 @@
 
 ## 0.1.0 - Alpha
 
-OpenDocs 的首个公开 Alpha 候选版本将本地文档转换为 Markdown。
+OpenDocs 的首个公开 Alpha 将本地文档转换为 Markdown。
 
 ### 支持范围
 

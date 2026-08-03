@@ -242,7 +242,7 @@ def render_release_evidence(
     lines = [
         f"# OpenDocs v{first['package_version']} 发布证据",
         "",
-        f"- 候选 commit: `{first['candidate_commit']}`",
+        f"Candidate commit: {first['candidate_commit']}",
         f"- 质量策略: `{first['policy_version']}` (`{first['policy_digest']}`)",
         f"- manifest 摘要: `{first['manifest_digest']}`",
         f"- evaluator: `{first['evaluator_version']}`",
