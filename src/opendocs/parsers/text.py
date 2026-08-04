@@ -4,7 +4,7 @@ import asyncio
 import re
 
 from opendocs._models import DocumentType, MarkdownBlock, ParsedDocument, TextBlock
-from opendocs.errors import CorruptDocumentError, LimitExceededError
+from opendocs.errors import CorruptDocumentError, LimitExceededError, NoUsableContentError
 from opendocs.options import ParseOptions
 from opendocs.source import ResolvedSource
 
@@ -47,6 +47,8 @@ class TextParser:
     ) -> ParsedDocument:
         del options
         value = await asyncio.to_thread(_read_utf8, source)
+        if not value.strip():
+            raise NoUsableContentError(f"{self._document_type.value} document is empty")
 
         if self._document_type is DocumentType.MARKDOWN:
             blocks = (MarkdownBlock(markdown=value),)

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from opendocs._models import BBox
+from opendocs.errors import LimitExceededError
 from opendocs.parsers.pdf.extract import bbox_area, intersection_area, union_area
 from opendocs.parsers.pdf.models import PageFacts, PageRoute, PageRouteDecision, VisualRegion
 
@@ -8,6 +9,7 @@ SIGNIFICANT_REGION_AREA_MIN = 0.05
 FULL_PAGE_IMAGE_AREA_MIN = 0.85
 FULL_VISION_UNION_AREA_MIN = 0.60
 MAX_REGIONS_PER_PAGE = 4
+MAX_VISUAL_CANDIDATES_PER_PAGE = 1_024
 REGION_PADDING = 0.015
 REGION_MERGE_GAP = 0.02
 VECTOR_OBJECT_COUNT_MIN = 30
@@ -33,6 +35,8 @@ def _should_merge(left: BBox, right: BBox) -> bool:
 def build_visual_regions(
     candidates: list[tuple[BBox, str]],
 ) -> tuple[VisualRegion, ...]:
+    if len(candidates) > MAX_VISUAL_CANDIDATES_PER_PAGE:
+        raise LimitExceededError("PDF visual region candidates exceed the resource budget")
     merged = [(_expand(bbox), {reason}, index) for index, (bbox, reason) in enumerate(candidates)]
     while True:
         for left_index, (left, reasons, source_index) in enumerate(merged):

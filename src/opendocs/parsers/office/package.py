@@ -224,6 +224,33 @@ def validate_office_package(path: Path, *, document_type: DocumentType) -> Offic
     )
 
 
+def _local_name(tag: str) -> str:
+    return tag.rsplit("}", 1)[-1]
+
+
+def enforce_pptx_page_limit(path: Path, *, max_pages: int) -> None:
+    if isinstance(max_pages, bool) or not isinstance(max_pages, int):
+        raise TypeError("max_pages must be an int")
+    if max_pages <= 0:
+        raise ValueError("max_pages must be greater than zero")
+
+    layout = validate_office_package(path, document_type=DocumentType.PPTX)
+    try:
+        with ZipFile(path) as archive:
+            root = ET.fromstring(archive.read(layout.main_part_name))
+    except (BadZipFile, KeyError, OSError, ET.ParseError) as error:
+        raise CorruptDocumentError("PPTX presentation part is corrupt") from error
+
+    page_count = sum(
+        _local_name(slide.tag) == "sldId"
+        for child in root
+        if _local_name(child.tag) == "sldIdLst"
+        for slide in child
+    )
+    if page_count > max_pages:
+        raise LimitExceededError(f"PPTX exceeds the configured {max_pages} page limit")
+
+
 def open_validated_office_document(
     path: Path,
     *,

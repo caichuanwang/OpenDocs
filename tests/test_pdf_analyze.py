@@ -5,16 +5,23 @@ from types import SimpleNamespace
 
 import pytest  # pyright: ignore[reportMissingImports]
 
+import opendocs.parsers.pdf.analyze as analyze_module
 from opendocs._models import BBox, CoordinateTransform
 from opendocs._runtime import ParserRuntime
 from opendocs.errors import CorruptDocumentError, LimitExceededError
 from opendocs.parsers.pdf.analyze import (
     _analyze_page,
     _normalized_box,
+    _reading_order_ambiguity,
     analyze_pdf,
     analyze_pdf_native,
 )
-from opendocs.parsers.pdf.models import NativeTableCandidate, NativeTextCandidate, PageRoute
+from opendocs.parsers.pdf.models import (
+    NativeTableCandidate,
+    NativeTextCandidate,
+    PageRoute,
+    PdfWord,
+)
 from opendocs.parsers.pdf.routing import route_page
 from opendocs.source import parse_workspace
 
@@ -372,6 +379,17 @@ def test_native_word_budget_fails_typed_before_reading_order(
 
     assert reading_order_called is False
     assert page.closed is True
+
+
+def test_reading_order_regions_stop_at_visual_candidate_budget(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(analyze_module, "MAX_VISUAL_CANDIDATES_PER_PAGE", 2)
+    bbox = BBox(0.1, 0.1, 0.2, 0.2)
+    words = tuple(PdfWord("x", bbox, index) for index in range(3))
+
+    with pytest.raises(LimitExceededError, match="visual region candidates"):
+        _reading_order_ambiguity(words)
 
 
 def test_each_page_cache_is_closed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

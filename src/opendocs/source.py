@@ -5,6 +5,7 @@ import os
 import shutil
 import sys
 import tempfile
+import threading
 import warnings
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager, suppress
@@ -145,10 +146,21 @@ def _write_temporary(path: Path, data: bytes) -> None:
         handle.write(data)
 
 
-def _cleanup_finished_write(task: asyncio.Task[None], path: Path) -> None:
+def _consume_finished_write(task: asyncio.Task[None]) -> None:
     if not task.cancelled():
         task.exception()
-    _schedule_background_cleanup(path)
+
+
+def _write_temporary_with_cancellation_cleanup(
+    path: Path,
+    data: bytes,
+    cleanup_requested: threading.Event,
+) -> None:
+    try:
+        _write_temporary(path, data)
+    finally:
+        if cleanup_requested.is_set():
+            _cleanup_owned_path_now(path)
 
 
 async def _unlink_if_exists(path: Path) -> None:
@@ -169,21 +181,16 @@ def _warn_cleanup_failure(path: Path, error: BaseException) -> None:
     )
 
 
-def _consume_task_exception(task: asyncio.Task[object], path: Path) -> None:
-    if not task.cancelled():
-        exception = task.exception()
-        if exception is not None:
-            _warn_cleanup_failure(path, exception)
-
-
-def _schedule_background_cleanup(path: Path) -> None:
-    cleanup_task = asyncio.create_task(_cleanup_owned_path(path))
-    cleanup_task.add_done_callback(lambda task: _consume_task_exception(task, path))
+def _cleanup_owned_path_now(path: Path) -> None:
+    try:
+        path.unlink(missing_ok=True)
+    except OSError as error:
+        _warn_cleanup_failure(path, error)
 
 
 async def _cleanup_after_cancellation(path: Path, *, wait: bool) -> None:
     if not wait:
-        _schedule_background_cleanup(path)
+        _cleanup_owned_path_now(path)
         return
 
     try:
@@ -196,7 +203,15 @@ async def _cleanup_after_cancellation(path: Path, *, wait: bool) -> None:
 
 async def _write_owned(data: bytes, *, wait_for_cleanup_on_cancel: bool) -> Path:
     path = _create_temporary_path(data)
-    write_task = asyncio.create_task(asyncio.to_thread(_write_temporary, path, data))
+    cleanup_requested = threading.Event()
+    write_task = asyncio.create_task(
+        asyncio.to_thread(
+            _write_temporary_with_cancellation_cleanup,
+            path,
+            data,
+            cleanup_requested,
+        )
+    )
     try:
         await asyncio.shield(write_task)
     except asyncio.CancelledError:
@@ -205,7 +220,9 @@ async def _write_owned(data: bytes, *, wait_for_cleanup_on_cancel: bool) -> Path
                 await write_task
             await _cleanup_after_cancellation(path, wait=True)
         else:
-            write_task.add_done_callback(lambda completed: _cleanup_finished_write(completed, path))
+            cleanup_requested.set()
+            await _cleanup_after_cancellation(path, wait=False)
+            write_task.add_done_callback(_consume_finished_write)
         raise
     except OSError:
         await _unlink_if_exists(path)
