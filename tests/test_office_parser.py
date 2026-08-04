@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-import pytest
+import pytest  # pyright: ignore[reportMissingImports]
 
 from opendocs._models import BBox, DocumentType, PageBreakBlock, TextBlock
 from opendocs._runtime import ParserRuntime
@@ -39,8 +39,13 @@ class RecordingVision:
         return self.result
 
 
-def _image(source_index: int, digest: str = "a" * 64) -> ImageSlot:
-    return ImageSlot(source_index, "embedded.png", digest, BBox(0, 0, 1, 1))
+def _image(
+    source_index: int,
+    digest: str = "a" * 64,
+    bbox: BBox | None = None,
+    alt_text: str | None = None,
+) -> ImageSlot:
+    return ImageSlot(source_index, "embedded.png", digest, bbox or BBox(0, 0, 1, 1), alt_text)
 
 
 def _runtime_with_document(
@@ -49,6 +54,7 @@ def _runtime_with_document(
     document: OfficeDocument,
     *,
     size: tuple[int, int] = (20, 10),
+    facts: dict[str, object] | None = None,
 ) -> tuple[ParserRuntime, list[str]]:
     workspace_path = tmp_path / "workspace"
     workspace_path.mkdir()
@@ -61,11 +67,38 @@ def _runtime_with_document(
         calls.append(function.__name__)
         if function.__name__ == "_extract_office_to_wire":
             return document_to_wire(document)
-        if function.__name__ == "_sanitize_embedded_image":
-            output_path = args[1]
-            assert isinstance(output_path, Path)
-            output_path.write_bytes(b"sanitized")
-            return size
+        if function.__name__ == "prepare_image":
+            output_directory = args[1]
+            output_stem = args[2]
+            assert isinstance(output_directory, Path)
+            assert isinstance(output_stem, str)
+            name = f"{output_stem}-0.png"
+            (output_directory / name).write_bytes(b"sanitized")
+            return {
+                "skipped": False,
+                "reason": None,
+                "width": size[0],
+                "height": size[1],
+                "parts": [
+                    {
+                        "name": name,
+                        "top": 0.0,
+                        "bottom": 1.0,
+                        "core_top": 0.0,
+                        "core_bottom": 1.0,
+                        "width": size[0],
+                        "height": size[1],
+                    }
+                ],
+                "facts": facts
+                or {
+                    "alpha_coverage": 1.0,
+                    "components": 1,
+                    "edge_density": 0.5,
+                    "color_count": 8,
+                    "nearly_blank": False,
+                },
+            }
         raise AssertionError(f"unexpected native function: {function.__name__}")
 
     monkeypatch.setattr(runtime, "run_native", run_native)
@@ -146,7 +179,7 @@ async def test_office_parser_deduplicates_images_and_replays_in_place(
         TextBlock("visual"),
     )
     assert len(vision.requests) == 1
-    assert calls == ["_extract_office_to_wire", "_sanitize_embedded_image"]
+    assert calls == ["_extract_office_to_wire", "prepare_image"]
     assert not (tmp_path / "workspace" / "office-sanitized-0.png").exists()
 
 
@@ -242,6 +275,35 @@ async def test_office_parser_fatal_model_configuration_error_is_never_degraded(
 
 
 @pytest.mark.asyncio
+async def test_office_parser_fatal_native_preparation_error_is_not_degraded(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    document = OfficeDocument(
+        DocumentType.DOCX,
+        (OfficePage(1, (NativeSlot(0, (TextBlock("native"),)), _image(1))),),
+    )
+    runtime, _ = _runtime_with_document(monkeypatch, tmp_path, document)
+
+    async def run_native(function: Any, *_args: object, **_kwargs: object) -> object:
+        if function.__name__ == "_extract_office_to_wire":
+            return document_to_wire(document)
+        if function.__name__ == "prepare_image":
+            raise ModelAuthenticationError("authentication")
+        raise AssertionError(f"unexpected native function: {function.__name__}")
+
+    monkeypatch.setattr(runtime, "run_native", run_native)
+    try:
+        with pytest.raises(ModelAuthenticationError):
+            await _parse(
+                OfficeParser(DocumentType.DOCX, runtime, None, None),
+                tmp_path,
+            )
+    finally:
+        await runtime.aclose()
+
+
+@pytest.mark.asyncio
 async def test_office_parser_applies_pptx_page_limit_before_visual_work(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -284,6 +346,132 @@ async def test_office_parser_blank_deck_is_not_semantic_content(
 
 
 @pytest.mark.asyncio
+async def test_office_parser_skips_decorative_occurrence_without_vision(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    document = OfficeDocument(
+        DocumentType.PPTX,
+        (
+            OfficePage(
+                1,
+                (
+                    NativeSlot(0, (TextBlock("native"),)),
+                    _image(1, bbox=BBox(0, 0, 0.1, 0.1), alt_text="Picture 1"),
+                ),
+            ),
+        ),
+    )
+    runtime, calls = _runtime_with_document(
+        monkeypatch,
+        tmp_path,
+        document,
+        size=(120, 120),
+        facts={
+            "alpha_coverage": 0.11,
+            "components": 1,
+            "edge_density": 0.08,
+            "color_count": 4,
+            "nearly_blank": False,
+        },
+    )
+    try:
+        result = await _parse(OfficeParser(DocumentType.PPTX, runtime, None, None), tmp_path)
+    finally:
+        await runtime.aclose()
+
+    assert TextBlock("native") in result.blocks
+    assert result.warnings == ()
+    assert calls == ["_extract_office_to_wire", "prepare_image"]
+    assert not tuple((tmp_path / "workspace").glob("office-sanitized-*.png"))
+
+
+@pytest.mark.asyncio
+async def test_office_parser_admits_only_large_occurrence_of_same_digest(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    document = OfficeDocument(
+        DocumentType.PPTX,
+        (
+            OfficePage(
+                1,
+                (
+                    NativeSlot(0, (TextBlock("before"),)),
+                    _image(1, bbox=BBox(0, 0, 0.1, 0.1)),
+                    NativeSlot(2, (TextBlock("middle"),)),
+                    _image(3, bbox=BBox(0.1, 0.1, 0.8, 0.8)),
+                ),
+            ),
+        ),
+    )
+    runtime, _ = _runtime_with_document(
+        monkeypatch,
+        tmp_path,
+        document,
+        size=(120, 120),
+        facts={
+            "alpha_coverage": 0.11,
+            "components": 1,
+            "edge_density": 0.08,
+            "color_count": 4,
+            "nearly_blank": False,
+        },
+    )
+    vision = RecordingVision(VisionResult((VisionTextElement("visual", 0),)))
+    try:
+        result = await _parse(
+            OfficeParser(DocumentType.PPTX, runtime, vision, VisionConfig("model")),
+            tmp_path,
+        )
+    finally:
+        await runtime.aclose()
+
+    assert len(vision.requests) == 1
+    assert result.blocks == (
+        PageBreakBlock(1),
+        TextBlock("before"),
+        TextBlock("middle"),
+        TextBlock("visual"),
+    )
+
+
+@pytest.mark.asyncio
+async def test_office_parser_meaningful_alt_text_prevents_decorative_skip(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    document = OfficeDocument(
+        DocumentType.PPTX,
+        (OfficePage(1, (_image(0, bbox=BBox(0, 0, 0.1, 0.1), alt_text="Revenue trend"),)),),
+    )
+    runtime, _ = _runtime_with_document(
+        monkeypatch,
+        tmp_path,
+        document,
+        size=(120, 120),
+        facts={
+            "alpha_coverage": 0.11,
+            "components": 1,
+            "edge_density": 0.08,
+            "color_count": 4,
+            "nearly_blank": False,
+        },
+    )
+    vision = RecordingVision(VisionResult((VisionTextElement("trend", 0),)))
+    try:
+        result = await _parse(
+            OfficeParser(DocumentType.PPTX, runtime, vision, VisionConfig("model")),
+            tmp_path,
+        )
+    finally:
+        await runtime.aclose()
+
+    assert TextBlock("trend") in result.blocks
+    assert len(vision.requests) == 1
+
+
+@pytest.mark.asyncio
 async def test_office_parser_fixed_vision_replay_is_deterministic(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -313,9 +501,9 @@ async def test_office_parser_fixed_vision_replay_is_deterministic(
     assert first == second
     assert calls == [
         "_extract_office_to_wire",
-        "_sanitize_embedded_image",
+        "prepare_image",
         "_extract_office_to_wire",
-        "_sanitize_embedded_image",
+        "prepare_image",
     ]
     assert [(request.source_index, request.kind) for request in vision.requests] == [
         (0, VisionRequestKind.PROSE),

@@ -13,6 +13,8 @@ from opendocs.errors import (
     CorruptDocumentError,
     DocumentTypeMismatchError,
     LimitExceededError,
+    ModelAuthenticationError,
+    ModelUnavailableError,
     NoUsableContentError,
     UnsupportedDocumentError,
     VisionRequiredError,
@@ -297,6 +299,67 @@ async def test_image_parser_downscales_model_artifact(tmp_path: Path) -> None:
     observed_size = vision.observed["size"]
     assert isinstance(observed_size, tuple)
     assert max(cast(tuple[int, int], observed_size)) == image_module._MAX_MODEL_LONG_SIDE
+
+
+@pytest.mark.asyncio
+async def test_image_parser_long_tiles_keep_order_partial_failure_and_cleanup(
+    tmp_path: Path,
+) -> None:
+    source_path = tmp_path / "long.png"
+    image = Image.new("RGB", (800, 4000), "white")
+    for y in range(100, 4000, 300):
+        for x in range(50, 750):
+            image.putpixel((x, y), (0, 0, 0))
+    image.save(source_path, "PNG")
+    image.close()
+
+    class PartialVision:
+        def __init__(self) -> None:
+            self.requests: list[VisionRequest] = []
+
+        async def analyze(self, request: VisionRequest) -> VisionResult:
+            self.requests.append(request)
+            if request.source_index == 1:
+                raise ModelUnavailableError("tile unavailable")
+            return VisionResult((VisionTextElement(f"tile {request.source_index}", 0),))
+
+    vision = PartialVision()
+    result = await _parse(
+        tmp_path,
+        ResolvedSource(source_path, source_path.name, False),
+        vision,
+    )
+
+    assert len(vision.requests) > 1
+    assert [block.text for block in result.blocks if isinstance(block, TextBlock)] == [
+        "tile 0",
+        "tile 2",
+    ]
+    assert [warning.code for warning in result.warnings] == ["image_tile_failed"]
+    assert not tuple(tmp_path.glob("sanitized-image-*.png"))
+
+
+@pytest.mark.asyncio
+async def test_image_parser_fatal_tile_error_is_not_degraded(tmp_path: Path) -> None:
+    source_path = tmp_path / "long.png"
+    image = Image.new("RGB", (800, 4000), "white")
+    image.putpixel((10, 10), (0, 0, 0))
+    image.save(source_path, "PNG")
+    image.close()
+
+    class FatalVision:
+        async def analyze(self, request: VisionRequest) -> VisionResult:
+            if request.source_index == 1:
+                raise ModelAuthenticationError("bad credentials")
+            return VisionResult((VisionTextElement("partial", 0),))
+
+    with pytest.raises(ModelAuthenticationError):
+        await _parse(
+            tmp_path,
+            ResolvedSource(source_path, source_path.name, False),
+            FatalVision(),
+        )
+    assert not tuple(tmp_path.glob("sanitized-image-*.png"))
 
 
 @pytest.mark.asyncio

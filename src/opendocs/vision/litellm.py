@@ -84,7 +84,8 @@ def _json_object_instruction(request: VisionRequest) -> str:
         else '"bbox" may be omitted.'
     )
     table_rule = (
-        "Include at least one table element."
+        "Return an empty elements array when no meaningful table is visible; otherwise include "
+        "at least one table element."
         if request.kind is VisionRequestKind.TABLE
         else "Use the element type that matches the visible content."
     )
@@ -161,10 +162,10 @@ def _parse_result(content: str, request: VisionRequest, *, allow_markdown: bool)
             elements.append(VisionTableElement(grid, header_rows, source_index, bbox))
             continue
         raise ValueError(f"element {index} does not match a tagged variant")
-    if request.structured_required and not elements:
-        raise ValueError("structured response contains no elements")
-    if request.kind is VisionRequestKind.TABLE and not any(
-        isinstance(element, VisionTableElement) for element in elements
+    if (
+        request.kind is VisionRequestKind.TABLE
+        and elements
+        and not any(isinstance(element, VisionTableElement) for element in elements)
     ):
         raise ValueError("table response contains no table element")
     if request.coordinate_space is not None and any(element.bbox is None for element in elements):

@@ -7,8 +7,6 @@ from contextlib import AbstractAsyncContextManager, suppress
 from pathlib import Path
 from typing import Protocol
 
-from PIL import Image  # pyright: ignore[reportMissingImports]
-
 from opendocs._models import (
     BBox,
     DocumentType,
@@ -48,8 +46,18 @@ from opendocs.vision.base import (
     VisionElement,
     VisionRequest,
     VisionRequestKind,
+    VisionResult,
     VisionTableElement,
     VisionTextElement,
+)
+from opendocs.vision.images import (
+    PreparedImage,
+    crop_image,
+    map_result_to_bbox,
+    merge_tiled_results,
+    prepare_image,
+    prepared_paths,
+    tile_prompt,
 )
 
 _HYBRID_PROMPT = """Extract all semantic content in this PDF crop in source order.
@@ -93,17 +101,8 @@ def _crop_page_image(
     pixel_box: tuple[int, int, int, int],
 ) -> None:
     try:
-        with Image.open(source_path) as opened:
-            opened.load()
-            cropped = opened.crop(pixel_box)
-            try:
-                clean = cropped.convert("RGB")
-            finally:
-                cropped.close()
-            clean.info.clear()
-            clean.save(output_path, format="PNG", optimize=False)
-            clean.close()
-    except (OSError, SyntaxError, TypeError, ValueError) as error:
+        crop_image(source_path, output_path, pixel_box)
+    except CorruptDocumentError as error:
         raise RuntimeDependencyError("PDF visual crop could not be prepared") from error
 
 
@@ -317,22 +316,91 @@ class PDFParser:
             except _UnreliableCropError:
                 return await self._full_page(page, rendered)
 
+    async def _analyze_prepared(
+        self,
+        prepared: PreparedImage,
+        *,
+        prompt: str,
+        source_index: int,
+        kind: VisionRequestKind,
+        coordinate_space: str | None = None,
+    ) -> tuple[VisionResult, tuple[OpenDocsError, ...]]:
+        if self._vision is None:
+            raise VisionRequiredError("PDF page requires vision")
+        paths = prepared_paths(prepared, self._runtime.workspace.path)
+        requests = [
+            VisionRequest(
+                path,
+                tile_prompt(prompt, index, len(paths)),
+                source_index if len(paths) == 1 else source_index * 10_000 + index,
+                kind,
+                coordinate_space,
+            )
+            for index, path in enumerate(paths)
+        ]
+        try:
+            outcomes = await asyncio.gather(
+                *(self._vision.analyze(request) for request in requests),
+                return_exceptions=True,
+            )
+        finally:
+            for path in paths:
+                with suppress(OSError):
+                    path.unlink(missing_ok=True)
+        results: list[VisionResult | None] = []
+        failures: list[OpenDocsError] = []
+        for outcome in outcomes:
+            if isinstance(outcome, asyncio.CancelledError):
+                raise outcome
+            if isinstance(outcome, _FATAL_VISUAL_ERRORS):
+                raise outcome
+            if isinstance(outcome, OpenDocsError):
+                failures.append(outcome)
+                results.append(None)
+            elif isinstance(outcome, BaseException):
+                failures.append(RuntimeDependencyError("PDF visual processing failed"))
+                results.append(None)
+            elif isinstance(outcome, VisionResult):
+                results.append(outcome)
+            else:
+                failures.append(RuntimeDependencyError("PDF vision client returned invalid data"))
+                results.append(None)
+        if failures and all(result is None for result in results):
+            raise failures[0]
+        return merge_tiled_results(prepared, results), tuple(failures)
+
     async def _full_page(
         self,
         page: PageFacts,
         rendered: RenderedPdfPage,
     ) -> PageVisionResult:
-        if self._vision is None:
-            raise VisionRequiredError("PDF page requires vision")
-        result = await self._vision.analyze(
-            VisionRequest(
-                rendered.image_path,
-                _FULL_PAGE_PROMPT,
-                page.page_number - 1,
-                VisionRequestKind.FULL_PAGE,
-            )
+        prepared = await self._runtime.run_native(
+            prepare_image,
+            rendered.image_path,
+            self._runtime.workspace.path,
+            f"pdf-page-{page.page_number}-{uuid.uuid4().hex}",
+            None,
+            "full_page",
         )
-        return PageVisionResult(page.page_number, PageRoute.FULL_VISION, result.elements, None)
+        if bool(prepared.get("skipped")):
+            return PageVisionResult(page.page_number, PageRoute.FULL_VISION, (), None)
+        result, failures = await self._analyze_prepared(
+            prepared,
+            prompt=(
+                f"{_FULL_PAGE_PROMPT.rstrip()}\nIgnore decorative icons and continue extracting "
+                "all other page content.\n"
+            ),
+            source_index=page.page_number - 1,
+            kind=VisionRequestKind.FULL_PAGE,
+        )
+        warnings = (_warning("visual_page_tile_failed", page.page_number),) if failures else ()
+        return PageVisionResult(
+            page.page_number,
+            PageRoute.FULL_VISION,
+            result.elements,
+            None,
+            warnings,
+        )
 
     async def _hybrid_page(
         self,
@@ -344,7 +412,8 @@ class PDFParser:
             raise ValueError("hybrid page requires vision regions")
         transform = rendered.transform
         crop_left, crop_top, _, _ = transform.crop_pixel_box
-        requests: list[tuple[VisualRegion, BBox, Path, VisionRequest]] = []
+        crops: list[Path] = []
+        prepared_regions: list[tuple[VisualRegion, BBox, PreparedImage]] = []
         try:
             for region_index, region in enumerate(regions):
                 try:
@@ -362,35 +431,62 @@ class PDFParser:
                 crop_path = self._runtime.workspace.output_path(
                     f"pdf-crop-{page.page_number}-{region_index}-{token}.png"
                 )
+                crops.append(crop_path)
                 await self._runtime.run_native(
                     _crop_page_image,
                     rendered.image_path,
                     crop_path,
                     local_pixels,
                 )
-                request = VisionRequest(
+                prepared = await self._runtime.run_native(
+                    prepare_image,
                     crop_path,
-                    _HYBRID_PROMPT,
-                    page.page_number * 10_000 + region.source_index,
-                    VisionRequestKind.HYBRID_CROP,
-                    CROP_NORMALIZED_V1,
+                    self._runtime.workspace.path,
+                    f"pdf-crop-prepared-{page.page_number}-{region_index}-{token}",
+                    None,
+                    "hybrid_crop",
                 )
-                requests.append((region, actual_crop_bbox, crop_path, request))
+                if bool(prepared.get("skipped")):
+                    continue
+                prepared_regions.append((region, actual_crop_bbox, prepared))
 
-            outcomes = await asyncio.gather(
-                *(self._vision.analyze(request) for _, _, _, request in requests),
+            async def analyze_region(
+                region: VisualRegion,
+                actual_crop_bbox: BBox,
+                prepared: PreparedImage,
+            ) -> tuple[VisionResult, tuple[OpenDocsError, ...]]:
+                outcome, tile_failures = await self._analyze_prepared(
+                    prepared,
+                    prompt=_HYBRID_PROMPT,
+                    source_index=page.page_number * 10_000 + region.source_index,
+                    kind=VisionRequestKind.HYBRID_CROP,
+                    coordinate_space=CROP_NORMALIZED_V1,
+                )
+                try:
+                    mapped = map_result_to_bbox(outcome, actual_crop_bbox)
+                except (TypeError, ValueError) as error:
+                    raise ModelInvalidResponseError(
+                        "hybrid vision result could not be mapped to the PDF page"
+                    ) from error
+                return mapped, tile_failures
+
+            analyzed = await asyncio.gather(
+                *(
+                    analyze_region(region, bbox, prepared)
+                    for region, bbox, prepared in prepared_regions
+                ),
                 return_exceptions=True,
             )
             mapped: list[VisionElement] = []
             warnings: list[WarningRecord] = []
-            failures: list[BaseException] = []
-            for (region, actual_crop_bbox, _, _), outcome in zip(requests, outcomes, strict=True):
-                if isinstance(outcome, asyncio.CancelledError):
-                    raise outcome
-                if isinstance(outcome, _FATAL_VISUAL_ERRORS):
-                    raise outcome
-                if isinstance(outcome, BaseException):
-                    failures.append(outcome)
+            failures: list[OpenDocsError] = []
+            for (region, _, _), result in zip(prepared_regions, analyzed, strict=True):
+                if isinstance(result, asyncio.CancelledError):
+                    raise result
+                if isinstance(result, _FATAL_VISUAL_ERRORS):
+                    raise result
+                if isinstance(result, OpenDocsError):
+                    failures.append(result)
                     warnings.append(
                         _warning(
                             "visual_region_failed",
@@ -399,9 +495,19 @@ class PDFParser:
                         )
                     )
                     continue
-                mapped.extend(
-                    _map_crop_element(element, actual_crop_bbox) for element in outcome.elements
-                )
+                if isinstance(result, BaseException):
+                    raise RuntimeDependencyError("PDF hybrid visual processing failed") from result
+                outcome, tile_failures = result
+                failures.extend(tile_failures)
+                if tile_failures:
+                    warnings.append(
+                        _warning(
+                            "visual_region_tile_failed",
+                            page.page_number,
+                            f"region {region.source_index}",
+                        )
+                    )
+                mapped.extend(outcome.elements)
             if failures and not mapped:
                 raise failures[0]
             return PageVisionResult(
@@ -412,6 +518,10 @@ class PDFParser:
                 tuple(warnings),
             )
         finally:
-            for _, _, crop_path, _ in requests:
+            for _, _, prepared in prepared_regions:
+                for path in prepared_paths(prepared, self._runtime.workspace.path):
+                    with suppress(OSError):
+                        path.unlink(missing_ok=True)
+            for crop_path in crops:
                 with suppress(OSError):
                     crop_path.unlink(missing_ok=True)
