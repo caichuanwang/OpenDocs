@@ -32,6 +32,7 @@ from opendocs.parsers.pdf.models import (
     page_to_wire,
 )
 from opendocs.parsers.pdf.routing import (
+    MAX_VISUAL_CANDIDATES_PER_PAGE,
     VECTOR_OBJECT_COUNT_MIN,
     build_visual_regions,
     significant_image,
@@ -165,6 +166,10 @@ def _reading_order_ambiguity(words: Sequence[PdfWord]) -> tuple[bool, list[BBox]
             left_area = (left.bbox.right - left.bbox.left) * (left.bbox.bottom - left.bbox.top)
             right_area = (right.bbox.right - right.bbox.left) * (right.bbox.bottom - right.bbox.top)
             if horizontal * vertical / min(left_area, right_area) >= 0.20:
+                if len(overlapping) >= MAX_VISUAL_CANDIDATES_PER_PAGE:
+                    raise LimitExceededError(
+                        "PDF visual region candidates exceed the resource budget"
+                    )
                 overlapping.append(
                     BBox(
                         min(left.bbox.left, right.bbox.left),

@@ -30,6 +30,7 @@ from opendocs.parsers.office.models import (
     document_from_wire,
     document_to_wire,
 )
+from opendocs.parsers.office.package import enforce_pptx_page_limit
 from opendocs.source import ParseWorkspace, ResolvedSource
 from opendocs.vision.base import VisionClient, VisionRequest, VisionRequestKind, VisionResult
 from opendocs.vision.images import (
@@ -58,6 +59,7 @@ def _extract_office_to_wire(
     document_type_value: str,
     path: Path,
     workspace_path: Path,
+    max_pages: int,
 ) -> dict[str, object]:
     document_type = DocumentType(document_type_value)
     workspace = ParseWorkspace(workspace_path)
@@ -68,6 +70,7 @@ def _extract_office_to_wire(
     elif document_type is DocumentType.PPTX:
         from opendocs.parsers.office.pptx import extract_pptx
 
+        enforce_pptx_page_limit(path, max_pages=max_pages)
         document = extract_pptx(path, workspace)
     else:
         raise ValueError("native Office extraction requires DOCX or PPTX")
@@ -143,7 +146,7 @@ class OfficeParser:
             deadline = min(deadline, self._deadline)
         try:
             async with asyncio.timeout_at(deadline):
-                document = await self._extract(source)
+                document = await self._extract(source, max_pages=options.max_pages)
                 if (
                     self._document_type is DocumentType.PPTX
                     and len(document.pages) > options.max_pages
@@ -178,12 +181,13 @@ class OfficeParser:
             f"{self._document_type.value.upper()} produced no usable content"
         )
 
-    async def _extract(self, source: ResolvedSource) -> OfficeDocument:
+    async def _extract(self, source: ResolvedSource, *, max_pages: int) -> OfficeDocument:
         wire = await self._runtime.run_native(
             _extract_office_to_wire,
             self._document_type.value,
             source.path,
             self._runtime.workspace.path,
+            max_pages,
         )
         try:
             document = document_from_wire(wire)

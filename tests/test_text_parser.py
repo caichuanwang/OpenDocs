@@ -8,6 +8,7 @@ import pytest
 from opendocs import (
     CorruptDocumentError,
     LimitExceededError,
+    NoUsableContentError,
     ParseOptions,
     UnsupportedDocumentError,
 )
@@ -79,6 +80,31 @@ async def test_text_parser_consumes_whitespace_only_separator_lines(
 
     assert document.blocks == (TextBlock(text="alpha"), TextBlock(text=" beta\n"))
     assert render_markdown(document, max_output_chars=400_000).markdown == "alpha\n\n beta\n"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("document_type", "name", "message"),
+    [
+        (DocumentType.TEXT, "empty.txt", "text document is empty"),
+        (DocumentType.MARKDOWN, "empty.md", "markdown document is empty"),
+    ],
+)
+async def test_text_parser_reports_empty_documents_explicitly(
+    tmp_path: Path,
+    document_type: DocumentType,
+    name: str,
+    message: str,
+) -> None:
+    path = tmp_path / name
+    path.write_bytes(b" \n\t")
+    parser = build_default_registry().get(document_type)
+
+    with pytest.raises(NoUsableContentError, match=message):
+        await parser.parse(
+            ResolvedSource(path=path, original_name=path.name, owned=False),
+            options=ParseOptions(),
+        )
 
 
 @pytest.mark.asyncio

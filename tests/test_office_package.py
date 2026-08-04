@@ -17,6 +17,7 @@ from opendocs.parsers.office.package import (
     MAX_TOTAL_ARCHIVE_BYTES,
     MAX_TOTAL_MEDIA_BYTES,
     MAX_XML_PART_BYTES,
+    enforce_pptx_page_limit,
     extract_package_media,
     open_validated_office_document,
     validate_office_package,
@@ -84,6 +85,26 @@ def test_validate_office_package_accepts_minimal_docx_and_pptx(tmp_path: Path) -
 
     assert docx_layout.main_part_name == "word/document.xml"
     assert pptx_layout.main_part_name == "ppt/presentation.xml"
+
+
+def test_pptx_page_limit_is_checked_from_main_part_before_extraction(tmp_path: Path) -> None:
+    path = tmp_path / "sample.pptx"
+    _write_zip(
+        path,
+        [
+            ("[Content_Types].xml", b"<Types/>"),
+            ("_rels/.rels", _doc_root_rels("ppt/presentation.xml")),
+            (
+                "ppt/presentation.xml",
+                b"""<p:presentation xmlns:p='urn:test'>
+<p:sldIdLst><p:sldId id='1'/><p:sldId id='2'/></p:sldIdLst>
+</p:presentation>""",
+            ),
+        ],
+    )
+
+    with pytest.raises(LimitExceededError, match="1 page limit"):
+        enforce_pptx_page_limit(path, max_pages=1)
 
 
 @pytest.mark.parametrize(

@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import io
 import threading
+import time
 import warnings
 from pathlib import Path
 from typing import Any, cast
@@ -345,32 +346,72 @@ async def test_owned_file_is_removed_after_cancellation() -> None:
         await task
 
     assert temporary_path is not None
-    for _ in range(100):
-        if not temporary_path.exists():
-            break
-        await asyncio.sleep(0.01)
     assert not temporary_path.exists()
 
 
+def test_write_cancellation_cleans_after_event_loop_closes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    started = threading.Event()
+    release = threading.Event()
+    finished = threading.Event()
+    temporary_path: Path | None = None
+
+    def delayed_write(path: Path, data: bytes) -> None:
+        nonlocal temporary_path
+        temporary_path = path
+        started.set()
+        assert release.wait(timeout=5), "test did not release the background write"
+        path.write_bytes(data)
+        finished.set()
+
+    monkeypatch.setattr(source_module, "_write_temporary", delayed_write)
+
+    async def cancel_write() -> None:
+        task = asyncio.create_task(materialize_source(b"hello").__aenter__())
+        assert await asyncio.to_thread(started.wait, 1), "background write did not start"
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+    loop = asyncio.new_event_loop()
+    try:
+        loop.run_until_complete(cancel_write())
+    finally:
+        pending = asyncio.all_tasks(loop)
+        for task in pending:
+            task.cancel()
+        if pending:
+            loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
+        loop.close()
+    release.set()
+
+    assert finished.wait(timeout=1), "background write did not finish"
+    assert temporary_path is not None
+    for _ in range(100):
+        if not temporary_path.exists():
+            break
+        time.sleep(0.01)
+    try:
+        assert not temporary_path.exists()
+    finally:
+        temporary_path.unlink(missing_ok=True)
+
+
 @pytest.mark.asyncio
-async def test_post_yield_cancellation_returns_promptly_and_cleans_eventually(
+async def test_post_yield_cancellation_cleans_without_async_cleanup(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     entered = asyncio.Event()
     cleanup_started = asyncio.Event()
-    cleanup_finished = asyncio.Event()
-    release_cleanup = asyncio.Event()
     temporary_path: Path | None = None
 
-    cleanup_impl = source_module._cleanup_owned_path
-
-    async def blocked_cleanup(path: Path) -> None:
+    async def forbidden_async_cleanup(path: Path) -> None:
+        del path
         cleanup_started.set()
-        await release_cleanup.wait()
-        await cleanup_impl(path)
-        cleanup_finished.set()
+        raise AssertionError("cancelled async cleanup must not be scheduled")
 
-    monkeypatch.setattr(source_module, "_cleanup_owned_path", blocked_cleanup)
+    monkeypatch.setattr(source_module, "_cleanup_owned_path", forbidden_async_cleanup)
 
     async def hold_source() -> None:
         nonlocal temporary_path
@@ -383,30 +424,28 @@ async def test_post_yield_cancellation_returns_promptly_and_cleans_eventually(
     await entered.wait()
     task.cancel()
 
-    try:
-        with pytest.raises(asyncio.CancelledError):
-            await asyncio.wait_for(task, timeout=0.2)
-    finally:
-        release_cleanup.set()
+    with pytest.raises(asyncio.CancelledError):
+        await asyncio.wait_for(task, timeout=0.2)
 
     assert temporary_path is not None
-    await asyncio.wait_for(cleanup_finished.wait(), timeout=1)
+    assert cleanup_started.is_set() is False
     assert not temporary_path.exists()
 
 
 @pytest.mark.asyncio
-async def test_post_yield_cancellation_warns_when_background_cleanup_fails(
+async def test_post_yield_cancellation_warns_when_immediate_cleanup_fails(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     entered = asyncio.Event()
-    release_cleanup = asyncio.Event()
     temporary_path: Path | None = None
+    real_unlink = Path.unlink
 
-    async def fail_cleanup(path: Path) -> None:
-        await release_cleanup.wait()
-        raise PermissionError(f"cleanup blocked for {path.name}")
+    def fail_owned_unlink(self: Path, *, missing_ok: bool = False) -> None:
+        if temporary_path is not None and self == temporary_path:
+            raise PermissionError(f"cleanup blocked for {self.name}")
+        real_unlink(self, missing_ok=missing_ok)
 
-    monkeypatch.setattr(source_module, "_cleanup_owned_path", fail_cleanup)
+    monkeypatch.setattr(Path, "unlink", fail_owned_unlink)
 
     with warnings.catch_warnings(record=True) as captured:
         warnings.simplefilter("always", OpenDocsWarning)
@@ -422,11 +461,8 @@ async def test_post_yield_cancellation_warns_when_background_cleanup_fails(
         await entered.wait()
         task.cancel()
 
-        try:
-            with pytest.raises(asyncio.CancelledError):
-                await asyncio.wait_for(task, timeout=0.2)
-        finally:
-            release_cleanup.set()
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(task, timeout=0.2)
 
         warning = await _wait_for_open_docs_warning(captured)
 
@@ -434,7 +470,7 @@ async def test_post_yield_cancellation_warns_when_background_cleanup_fails(
     assert warning.code == "source_cleanup_failed"
     assert str(temporary_path) in str(warning)
     assert "cleanup blocked" in str(warning)
-    temporary_path.unlink(missing_ok=True)
+    real_unlink(temporary_path, missing_ok=True)
 
 
 @pytest.mark.asyncio
@@ -477,13 +513,15 @@ async def test_cancellation_during_write_returns_promptly_and_cleans_eventually(
 
 
 @pytest.mark.asyncio
-async def test_cancellation_during_write_warns_when_background_cleanup_fails(
+async def test_cancellation_during_write_warns_when_immediate_cleanup_fails(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     started = threading.Event()
     release_write = threading.Event()
-    release_cleanup = asyncio.Event()
+    final_cleanup_attempted = threading.Event()
     temporary_path: Path | None = None
+    real_unlink = Path.unlink
+    cleanup_attempts = 0
 
     def delayed_write(path: Path, data: bytes) -> None:
         nonlocal temporary_path
@@ -492,12 +530,17 @@ async def test_cancellation_during_write_warns_when_background_cleanup_fails(
         assert release_write.wait(timeout=5), "test did not release the background write"
         path.write_bytes(data)
 
-    async def fail_cleanup(path: Path) -> None:
-        await release_cleanup.wait()
-        raise PermissionError(f"cleanup blocked for {path.name}")
+    def fail_owned_unlink(self: Path, *, missing_ok: bool = False) -> None:
+        nonlocal cleanup_attempts
+        if temporary_path is not None and self == temporary_path:
+            cleanup_attempts += 1
+            if cleanup_attempts >= 2:
+                final_cleanup_attempted.set()
+            raise PermissionError(f"cleanup blocked for {self.name}")
+        real_unlink(self, missing_ok=missing_ok)
 
     monkeypatch.setattr(source_module, "_write_temporary", delayed_write)
-    monkeypatch.setattr(source_module, "_cleanup_owned_path", fail_cleanup)
+    monkeypatch.setattr(Path, "unlink", fail_owned_unlink)
 
     with warnings.catch_warnings(record=True) as captured:
         warnings.simplefilter("always", OpenDocsWarning)
@@ -515,12 +558,12 @@ async def test_cancellation_during_write_warns_when_background_cleanup_fails(
                 await asyncio.wait_for(task, timeout=0.2)
         finally:
             release_write.set()
-            release_cleanup.set()
 
         warning = await _wait_for_open_docs_warning(captured)
+        assert await asyncio.to_thread(final_cleanup_attempted.wait, 1)
 
     assert temporary_path is not None
     assert warning.code == "source_cleanup_failed"
     assert str(temporary_path) in str(warning)
     assert "cleanup blocked" in str(warning)
-    temporary_path.unlink(missing_ok=True)
+    real_unlink(temporary_path, missing_ok=True)

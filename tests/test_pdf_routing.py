@@ -3,12 +3,14 @@ from __future__ import annotations
 import pytest
 
 from opendocs._models import BBox
+from opendocs.errors import LimitExceededError
 from opendocs.parsers.pdf.extract import measure_text_quality
 from opendocs.parsers.pdf.models import PageFacts, PageRoute, VisualRegion
 from opendocs.parsers.pdf.routing import (
     FULL_PAGE_IMAGE_AREA_MIN,
     FULL_VISION_UNION_AREA_MIN,
     MAX_REGIONS_PER_PAGE,
+    MAX_VISUAL_CANDIDATES_PER_PAGE,
     build_visual_regions,
     route_page,
 )
@@ -96,3 +98,13 @@ def test_visual_regions_merge_in_stable_source_order_with_reason_union() -> None
     assert len(regions) == 2
     assert regions[0].reasons == ("image", "table_structure_uncertain")
     assert regions[1].reasons == ("dense_drawing",)
+
+
+def test_visual_region_builder_rejects_candidates_beyond_resource_budget() -> None:
+    candidates = [
+        (BBox(0.1, 0.1, 0.2, 0.2), "reading_order_ambiguous")
+        for _ in range(MAX_VISUAL_CANDIDATES_PER_PAGE + 1)
+    ]
+
+    with pytest.raises(LimitExceededError, match="visual region candidates"):
+        build_visual_regions(candidates)

@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import inspect
 import io
 import threading
 import time
@@ -17,6 +16,7 @@ import opendocs.source as source_module
 from opendocs import (
     CorruptDocumentError,
     DocumentTimeoutError,
+    NoUsableContentError,
     OpenDocsWarning,
     ParseOptions,
     SyncInAsyncContextError,
@@ -87,6 +87,11 @@ def test_parse_and_aparse_match_for_unnamed_text_bytes_and_streams() -> None:
     assert async_stream.closed is False
 
 
+def test_empty_bytes_report_an_explicit_empty_document_error() -> None:
+    with pytest.raises(NoUsableContentError, match="text document is empty"):
+        parse(b"")
+
+
 @pytest.mark.asyncio
 async def test_parse_rejects_a_running_event_loop() -> None:
     with pytest.raises(SyncInAsyncContextError, match="await aparse"):
@@ -138,16 +143,12 @@ def test_sync_output_truncation_warning_points_to_the_parse_caller() -> None:
 
 
 @pytest.mark.asyncio
-async def test_timeout_during_detection_returns_promptly_when_source_cleanup_blocks(
+async def test_timeout_during_detection_cleans_without_async_cleanup(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     entered = asyncio.Event()
     cleanup_started = asyncio.Event()
-    cleanup_finished = asyncio.Event()
-    release_cleanup = asyncio.Event()
     temporary_path: Path | None = None
-    cleanup_impl = source_module._cleanup_owned_path
-    real_unlink = Path.unlink
 
     async def slow_detect(source: ResolvedSource) -> DocumentType:
         nonlocal temporary_path
@@ -156,36 +157,24 @@ async def test_timeout_during_detection_returns_promptly_when_source_cleanup_blo
         await asyncio.Event().wait()
         raise AssertionError("timeout should cancel detection")
 
-    async def blocked_cleanup(path: Path) -> None:
+    async def forbidden_async_cleanup(path: Path) -> None:
+        del path
         cleanup_started.set()
-        await release_cleanup.wait()
-        await cleanup_impl(path)
-        cleanup_finished.set()
-
-    def guarded_unlink(self: Path, *, missing_ok: bool = False) -> None:
-        for frame in inspect.stack():
-            if frame.function == "_cleanup_cancelled_owned_source":
-                raise AssertionError("api.py must not unlink owned temp files directly")
-        real_unlink(self, missing_ok=missing_ok)
+        raise AssertionError("cancelled async cleanup must not be scheduled")
 
     monkeypatch.setattr("opendocs.api._detect", slow_detect)
-    monkeypatch.setattr("opendocs.source._cleanup_owned_path", blocked_cleanup)
-    monkeypatch.setattr(Path, "unlink", guarded_unlink)
+    monkeypatch.setattr("opendocs.source._cleanup_owned_path", forbidden_async_cleanup)
 
     parse_task = asyncio.create_task(aparse(b"hello", options=ParseOptions(timeout=0.05)))
     await entered.wait()
     started_at = asyncio.get_running_loop().time()
 
-    try:
-        with pytest.raises(DocumentTimeoutError):
-            await asyncio.wait_for(parse_task, timeout=0.3)
-    finally:
-        release_cleanup.set()
+    with pytest.raises(DocumentTimeoutError):
+        await asyncio.wait_for(parse_task, timeout=0.3)
 
     assert asyncio.get_running_loop().time() - started_at < 0.3
     assert temporary_path is not None
-    await asyncio.wait_for(cleanup_started.wait(), timeout=1)
-    await asyncio.wait_for(cleanup_finished.wait(), timeout=1)
+    assert cleanup_started.is_set() is False
     assert not temporary_path.exists()
 
 
@@ -364,6 +353,7 @@ async def test_timeout_cleanup_failure_warns_without_replacing_document_timeout_
 ) -> None:
     entered = asyncio.Event()
     temporary_path: Path | None = None
+    real_unlink = Path.unlink
 
     async def blocked_detect(source: ResolvedSource) -> DocumentType:
         nonlocal temporary_path
@@ -372,11 +362,13 @@ async def test_timeout_cleanup_failure_warns_without_replacing_document_timeout_
         await asyncio.Event().wait()
         raise AssertionError("blocked detect should not resume")
 
-    async def fail_cleanup(path: Path) -> None:
-        raise PermissionError(f"cleanup blocked for {path.name}")
+    def fail_owned_unlink(self: Path, *, missing_ok: bool = False) -> None:
+        if temporary_path is not None and self == temporary_path:
+            raise PermissionError(f"cleanup blocked for {self.name}")
+        real_unlink(self, missing_ok=missing_ok)
 
     monkeypatch.setattr("opendocs.api._detect", blocked_detect)
-    monkeypatch.setattr(source_module, "_cleanup_owned_path", fail_cleanup)
+    monkeypatch.setattr(Path, "unlink", fail_owned_unlink)
 
     with warnings.catch_warnings(record=True) as captured:
         warnings.simplefilter("always", OpenDocsWarning)
@@ -389,7 +381,7 @@ async def test_timeout_cleanup_failure_warns_without_replacing_document_timeout_
     assert warning.code == "source_cleanup_failed"
     assert str(temporary_path) in str(warning)
     assert "cleanup blocked" in str(warning)
-    temporary_path.unlink(missing_ok=True)
+    real_unlink(temporary_path, missing_ok=True)
 
 
 @pytest.mark.asyncio
@@ -428,6 +420,7 @@ async def test_aparse_propagates_external_cancellation_when_source_cleanup_fails
 ) -> None:
     entered = asyncio.Event()
     temporary_path: Path | None = None
+    real_unlink = Path.unlink
 
     async def blocked_detect(source: ResolvedSource) -> DocumentType:
         nonlocal temporary_path
@@ -436,11 +429,13 @@ async def test_aparse_propagates_external_cancellation_when_source_cleanup_fails
         await asyncio.Event().wait()
         raise AssertionError("blocked detect should not resume")
 
-    async def fail_cleanup(path: Path) -> None:
-        raise PermissionError(f"cleanup blocked for {path.name}")
+    def fail_owned_unlink(self: Path, *, missing_ok: bool = False) -> None:
+        if temporary_path is not None and self == temporary_path:
+            raise PermissionError(f"cleanup blocked for {self.name}")
+        real_unlink(self, missing_ok=missing_ok)
 
     monkeypatch.setattr("opendocs.api._detect", blocked_detect)
-    monkeypatch.setattr(source_module, "_cleanup_owned_path", fail_cleanup)
+    monkeypatch.setattr(Path, "unlink", fail_owned_unlink)
 
     with warnings.catch_warnings(record=True) as captured:
         warnings.simplefilter("always", OpenDocsWarning)
@@ -457,7 +452,7 @@ async def test_aparse_propagates_external_cancellation_when_source_cleanup_fails
     assert warning.code == "source_cleanup_failed"
     assert str(temporary_path) in str(warning)
     assert "cleanup blocked" in str(warning)
-    temporary_path.unlink(missing_ok=True)
+    real_unlink(temporary_path, missing_ok=True)
 
 
 def test_public_all_exposes_only_the_documented_surface() -> None:

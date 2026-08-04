@@ -5,6 +5,7 @@ from typing import Any
 
 import pytest  # pyright: ignore[reportMissingImports]
 
+import opendocs.parsers.office.parser as parser_module
 from opendocs._models import BBox, DocumentType, PageBreakBlock, TextBlock
 from opendocs._runtime import ParserRuntime
 from opendocs.errors import (
@@ -22,7 +23,7 @@ from opendocs.parsers.office.models import (
     OfficePage,
     document_to_wire,
 )
-from opendocs.parsers.office.parser import OfficeParser
+from opendocs.parsers.office.parser import OfficeParser, _extract_office_to_wire
 from opendocs.source import ParseWorkspace, ResolvedSource
 from opendocs.vision.base import VisionRequest, VisionRequestKind, VisionResult, VisionTextElement
 
@@ -117,6 +118,31 @@ async def _parse(
         ResolvedSource(source, source.name, False),
         options=options or ParseOptions(),
     )
+
+
+def test_native_pptx_page_limit_runs_before_document_extraction(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    events: list[str] = []
+
+    def reject_page_limit(path: Path, *, max_pages: int) -> None:
+        del path, max_pages
+        events.append("limit")
+        raise LimitExceededError("page limit")
+
+    def forbidden_extract(path: Path, workspace: ParseWorkspace) -> OfficeDocument:
+        del path, workspace
+        events.append("extract")
+        raise AssertionError("PPTX extraction must not start after the page limit fails")
+
+    monkeypatch.setattr(parser_module, "enforce_pptx_page_limit", reject_page_limit)
+    monkeypatch.setattr("opendocs.parsers.office.pptx.extract_pptx", forbidden_extract)
+
+    with pytest.raises(LimitExceededError, match="page limit"):
+        _extract_office_to_wire("pptx", tmp_path / "source.pptx", tmp_path, 1)
+
+    assert events == ["limit"]
 
 
 @pytest.mark.asyncio
