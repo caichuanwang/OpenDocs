@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import re
 from contextlib import suppress
 from pathlib import Path
 
@@ -18,7 +19,6 @@ from opendocs.errors import (
     VisionRequiredError,
 )
 from opendocs.options import ParseOptions, VisionConfig
-from opendocs.parsers.image import _sanitize_embedded_image
 from opendocs.parsers.office.merge import (
     OfficeVisualOutcome,
     has_semantic_office_content,
@@ -32,9 +32,18 @@ from opendocs.parsers.office.models import (
 )
 from opendocs.source import ParseWorkspace, ResolvedSource
 from opendocs.vision.base import VisionClient, VisionRequest, VisionRequestKind, VisionResult
+from opendocs.vision.images import (
+    ULTRA_WIDE_RATIO,
+    PreparedImage,
+    is_decorative_embedded,
+    merge_tiled_results,
+    prepare_image,
+    prepared_paths,
+    tile_prompt,
+)
 from opendocs.vision.prompts import GENERAL_IMAGE_PROMPT, TABLE_IMAGE_PROMPT
 
-_ULTRA_WIDE_RATIO = 4.0
+_ULTRA_WIDE_RATIO = ULTRA_WIDE_RATIO
 _RECOVERABLE_VISUAL_WARNING = "embedded_image_failed"
 _FATAL_VISUAL_ERRORS = (
     ModelAuthenticationError,
@@ -84,6 +93,27 @@ def _unique_images(slots: tuple[ImageSlot, ...]) -> tuple[ImageSlot, ...]:
     return tuple(unique)
 
 
+def _image_occurrences(document: OfficeDocument) -> dict[str, tuple[tuple[int, ImageSlot], ...]]:
+    grouped: dict[str, list[tuple[int, ImageSlot]]] = {}
+    for page in document.pages:
+        for slot in page.slots:
+            if isinstance(slot, ImageSlot):
+                grouped.setdefault(slot.content_sha256, []).append((page.page_number, slot))
+    return {digest: tuple(items) for digest, items in grouped.items()}
+
+
+def _placement_area(document_type: DocumentType, slot: ImageSlot) -> float | None:
+    if document_type is DocumentType.DOCX:
+        return None
+    return (slot.bbox.right - slot.bbox.left) * (slot.bbox.bottom - slot.bbox.top)
+
+
+def _meaningful_alt_text(value: str | None) -> bool:
+    if value is None or not value.strip():
+        return False
+    return re.fullmatch(r"(?:picture|image|graphic)\s*\d+", value.strip(), re.IGNORECASE) is None
+
+
 class OfficeParser:
     def __init__(
         self,
@@ -131,7 +161,14 @@ class OfficeParser:
         if has_semantic_office_content(merged):
             return merged
         images = _image_slots(document)
-        if images and (self._vision is None or self._vision_config is None):
+        if (
+            images
+            and (self._vision is None or self._vision_config is None)
+            and any(
+                outcome.warning_code == "vision_unavailable_native_only"
+                for outcome in visual_outcomes.values()
+            )
+        ):
             raise VisionRequiredError(
                 f"{self._document_type.value.upper()} requires vision but none was configured"
             )
@@ -163,31 +200,28 @@ class OfficeParser:
         images = _unique_images(_image_slots(document))
         if not images:
             return {}, ()
-        if self._vision is None or self._vision_config is None:
-            return {
-                image.content_sha256: OfficeVisualOutcome(
-                    None,
-                    "vision_unavailable_native_only",
-                )
-                for image in images
-            }, ()
-
+        occurrences = _image_occurrences(document)
         outcomes: dict[str, OfficeVisualOutcome] = {}
         failures: list[OpenDocsError] = []
-        prepared: list[tuple[ImageSlot, Path, VisionRequest]] = []
+        prepared_items: list[
+            tuple[int, ImageSlot, PreparedImage, tuple[Path, ...], frozenset[tuple[int, int]]]
+        ] = []
         try:
             for admission_index, image in enumerate(images):
                 source_path = self._runtime.workspace.output_path(image.artifact_name)
-                sanitized_path = self._runtime.workspace.output_path(
-                    f"office-sanitized-{admission_index}.png"
-                )
                 try:
-                    width, height = await self._runtime.run_native(
-                        _sanitize_embedded_image,
+                    prepared = await self._runtime.run_native(
+                        prepare_image,
                         source_path,
-                        sanitized_path,
+                        self._runtime.workspace.path,
+                        f"office-sanitized-{admission_index}",
+                        None,
+                        "embedded",
+                        None,
                     )
                 except asyncio.CancelledError:
+                    raise
+                except _FATAL_VISUAL_ERRORS:
                     raise
                 except OpenDocsError as error:
                     failures.append(error)
@@ -196,58 +230,129 @@ class OfficeParser:
                         _RECOVERABLE_VISUAL_WARNING,
                     )
                     continue
-                is_table = width / height >= _ULTRA_WIDE_RATIO
-                prepared.append(
-                    (
-                        image,
-                        sanitized_path,
-                        VisionRequest(
-                            sanitized_path,
-                            TABLE_IMAGE_PROMPT if is_table else GENERAL_IMAGE_PROMPT,
-                            admission_index,
-                            VisionRequestKind.TABLE if is_table else VisionRequestKind.PROSE,
-                        ),
+                paths = prepared_paths(prepared, self._runtime.workspace.path)
+                admitted = frozenset(
+                    (page_number, slot.source_index)
+                    for page_number, slot in occurrences[image.content_sha256]
+                    if not is_decorative_embedded(
+                        prepared,
+                        _placement_area(document.document_type, slot),
+                        meaningful_alt_text=_meaningful_alt_text(slot.alt_text),
                     )
                 )
+                if bool(prepared.get("skipped")) or not admitted:
+                    outcomes[image.content_sha256] = OfficeVisualOutcome(None, None, admitted)
+                    for path in paths:
+                        with suppress(OSError):
+                            path.unlink(missing_ok=True)
+                    continue
+                if self._vision is None or self._vision_config is None:
+                    outcomes[image.content_sha256] = OfficeVisualOutcome(
+                        None,
+                        "vision_unavailable_native_only",
+                        admitted,
+                    )
+                    for path in paths:
+                        with suppress(OSError):
+                            path.unlink(missing_ok=True)
+                    continue
+                prepared_items.append((admission_index, image, prepared, paths, admitted))
 
-            model_results = await asyncio.gather(
-                *(self._vision.analyze(request) for _, _, request in prepared),
+            vision = self._vision
+            if vision is None:
+                if prepared_items:
+                    raise RuntimeDependencyError("Office vision client is unavailable")
+                return outcomes, tuple(failures)
+            active_vision: VisionClient = vision
+
+            async def analyze_item(
+                item: tuple[
+                    int,
+                    ImageSlot,
+                    PreparedImage,
+                    tuple[Path, ...],
+                    frozenset[tuple[int, int]],
+                ],
+            ) -> tuple[str, OfficeVisualOutcome, tuple[OpenDocsError, ...]]:
+                admission_index, image, prepared, paths, admitted = item
+                width = prepared.get("width")
+                height = prepared.get("height")
+                if not isinstance(width, int) or not isinstance(height, int):
+                    error = RuntimeDependencyError("Office image dimensions are invalid")
+                    return (
+                        image.content_sha256,
+                        OfficeVisualOutcome(None, _RECOVERABLE_VISUAL_WARNING, admitted),
+                        (error,),
+                    )
+                is_table = width / height >= _ULTRA_WIDE_RATIO
+                prompt = TABLE_IMAGE_PROMPT if is_table else GENERAL_IMAGE_PROMPT
+                kind = VisionRequestKind.TABLE if is_table else VisionRequestKind.PROSE
+                requests = [
+                    VisionRequest(
+                        path,
+                        tile_prompt(prompt, tile_index, len(paths)),
+                        admission_index * 10_000 + tile_index,
+                        kind,
+                    )
+                    for tile_index, path in enumerate(paths)
+                ]
+                model_results = await asyncio.gather(
+                    *(active_vision.analyze(request) for request in requests),
+                    return_exceptions=True,
+                )
+                tile_results: list[VisionResult | None] = []
+                item_failures: list[OpenDocsError] = []
+                for result in model_results:
+                    if isinstance(result, asyncio.CancelledError):
+                        raise result
+                    if isinstance(result, _FATAL_VISUAL_ERRORS):
+                        raise result
+                    if isinstance(result, OpenDocsError):
+                        item_failures.append(result)
+                        tile_results.append(None)
+                    elif isinstance(result, BaseException):
+                        item_failures.append(
+                            RuntimeDependencyError(
+                                f"Office vision client failed: {type(result).__name__}"
+                            )
+                        )
+                        tile_results.append(None)
+                    elif isinstance(result, VisionResult):
+                        tile_results.append(result)
+                    else:
+                        item_failures.append(
+                            RuntimeDependencyError("Office vision client returned invalid data")
+                        )
+                        tile_results.append(None)
+                if item_failures and all(result is None for result in tile_results):
+                    outcome = OfficeVisualOutcome(None, "vision_image_failed", admitted)
+                else:
+                    result = merge_tiled_results(prepared, tile_results)
+                    warning = "vision_image_empty" if not result.elements else None
+                    if item_failures and result.elements:
+                        warning = "vision_image_tile_failed"
+                    outcome = OfficeVisualOutcome(result, warning, admitted)
+                return image.content_sha256, outcome, tuple(item_failures)
+
+            analyzed = await asyncio.gather(
+                *(analyze_item(item) for item in prepared_items),
                 return_exceptions=True,
             )
-            for (image, _, _), result in zip(prepared, model_results, strict=True):
-                if isinstance(result, asyncio.CancelledError):
-                    raise result
-                if isinstance(result, _FATAL_VISUAL_ERRORS):
-                    raise result
-                if isinstance(result, OpenDocsError):
-                    failures.append(result)
-                    outcomes[image.content_sha256] = OfficeVisualOutcome(
-                        None,
-                        "vision_image_failed",
-                    )
-                elif isinstance(result, BaseException):
-                    wrapped = RuntimeDependencyError(
-                        f"Office vision client failed: {type(result).__name__}"
-                    )
-                    failures.append(wrapped)
-                    outcomes[image.content_sha256] = OfficeVisualOutcome(
-                        None,
-                        "vision_image_failed",
-                    )
-                elif isinstance(result, VisionResult):
-                    outcomes[image.content_sha256] = OfficeVisualOutcome(
-                        result,
-                        None if result.elements else "vision_image_empty",
-                    )
-                else:
-                    wrapped = RuntimeDependencyError("Office vision client returned invalid data")
-                    failures.append(wrapped)
-                    outcomes[image.content_sha256] = OfficeVisualOutcome(
-                        None,
-                        "vision_image_failed",
-                    )
+            for _item, analyzed_item in zip(prepared_items, analyzed, strict=True):
+                if isinstance(analyzed_item, asyncio.CancelledError):
+                    raise analyzed_item
+                if isinstance(analyzed_item, _FATAL_VISUAL_ERRORS):
+                    raise analyzed_item
+                if isinstance(analyzed_item, BaseException):
+                    raise RuntimeDependencyError(
+                        f"Office vision processing failed: {type(analyzed_item).__name__}"
+                    ) from analyzed_item
+                digest, outcome, item_failures = analyzed_item
+                outcomes[digest] = outcome
+                failures.extend(item_failures)
         finally:
-            for _, sanitized_path, _ in prepared:
-                with suppress(OSError):
-                    sanitized_path.unlink(missing_ok=True)
+            for _, _, _, paths, _ in prepared_items:
+                for path in paths:
+                    with suppress(OSError):
+                        path.unlink(missing_ok=True)
         return outcomes, tuple(failures)

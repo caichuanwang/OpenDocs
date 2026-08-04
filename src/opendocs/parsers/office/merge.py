@@ -30,6 +30,7 @@ _MAX_WARNINGS_PER_CODE = 20
 class OfficeVisualOutcome:
     result: VisionResult | None
     warning_code: str | None = None
+    occurrences: frozenset[tuple[int, int]] | None = None
 
     def __post_init__(self) -> None:
         if self.result is not None and not isinstance(self.result, VisionResult):
@@ -38,6 +39,16 @@ class OfficeVisualOutcome:
             raise TypeError("warning_code must be a str or None")
         if self.warning_code == "":
             raise ValueError("warning_code must not be empty")
+        if self.occurrences is not None and (
+            not isinstance(self.occurrences, frozenset)
+            or any(
+                not isinstance(item, tuple)
+                or len(item) != 2
+                or any(isinstance(value, bool) or not isinstance(value, int) for value in item)
+                for item in self.occurrences
+            )
+        ):
+            raise TypeError("occurrences must be a frozenset of page/source pairs or None")
 
 
 def _vision_blocks(result: VisionResult) -> tuple[Block, ...]:
@@ -106,6 +117,9 @@ def merge_office_document(
             elif isinstance(slot, ImageSlot):
                 outcome = visual_outcomes.get(slot.content_sha256)
                 if outcome is None:
+                    continue
+                occurrence = (page.page_number, slot.source_index)
+                if outcome.occurrences is not None and occurrence not in outcome.occurrences:
                     continue
                 if outcome.result is not None:
                     blocks.extend(_vision_blocks(outcome.result))

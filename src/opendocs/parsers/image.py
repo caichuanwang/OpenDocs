@@ -1,18 +1,24 @@
 from __future__ import annotations
 
-import warnings
+import asyncio
+from contextlib import suppress
 from pathlib import Path
 
-from PIL import Image, ImageOps
-
-from opendocs._models import DocumentType, ParsedDocument, TableBlock, TextBlock
+from opendocs._models import (
+    DocumentType,
+    ParsedDocument,
+    TableBlock,
+    TextBlock,
+    WarningRecord,
+)
 from opendocs._runtime import ParserRuntime
 from opendocs.errors import (
-    CorruptDocumentError,
-    DocumentTypeMismatchError,
-    LimitExceededError,
+    ModelAuthenticationError,
+    ModelInvalidRequestError,
+    ModelPermissionError,
     NoUsableContentError,
-    UnsupportedDocumentError,
+    OpenDocsError,
+    RuntimeDependencyError,
     VisionRequiredError,
 )
 from opendocs.options import ParseOptions, VisionConfig
@@ -21,74 +27,48 @@ from opendocs.vision.base import (
     VisionClient,
     VisionRequest,
     VisionRequestKind,
+    VisionResult,
     VisionTableElement,
     VisionTextElement,
 )
+from opendocs.vision.images import (
+    MAX_HEIGHT,
+    MAX_MODEL_LONG_SIDE,
+    MAX_PIXELS,
+    MAX_WIDTH,
+    ULTRA_WIDE_RATIO,
+    merge_tiled_results,
+    prepare_image,
+    prepared_paths,
+    sanitize_image,
+    tile_prompt,
+)
 from opendocs.vision.prompts import GENERAL_IMAGE_PROMPT, TABLE_IMAGE_PROMPT
 
-_MAX_WIDTH = 50_000
-_MAX_HEIGHT = 50_000
-_MAX_PIXELS = 80_000_000
-_MAX_MODEL_LONG_SIDE = 2_048
-_ULTRA_WIDE_RATIO = 4.0
-_ALLOWED_FORMATS = frozenset({"PNG", "JPEG", "WEBP"})
-_SUFFIX_FORMATS = {
-    ".png": "PNG",
-    ".jpg": "JPEG",
-    ".jpeg": "JPEG",
-    ".webp": "WEBP",
-}
+_MAX_WIDTH = MAX_WIDTH
+_MAX_HEIGHT = MAX_HEIGHT
+_MAX_PIXELS = MAX_PIXELS
+_MAX_MODEL_LONG_SIDE = MAX_MODEL_LONG_SIDE
+_ULTRA_WIDE_RATIO = ULTRA_WIDE_RATIO
+_FATAL_VISUAL_ERRORS = (
+    ModelAuthenticationError,
+    ModelPermissionError,
+    ModelInvalidRequestError,
+    RuntimeDependencyError,
+)
 
 
 def _sanitize_image(
     source_path: Path, output_path: Path, original_name: str | None
 ) -> tuple[int, int]:
-    try:
-        with warnings.catch_warnings():
-            warnings.simplefilter("error", Image.DecompressionBombWarning)
-            with Image.open(source_path) as candidate:
-                detected_format = candidate.format
-                width, height = candidate.size
-                frames = getattr(candidate, "n_frames", 1)
-                candidate.verify()
-            if detected_format not in _ALLOWED_FORMATS:
-                raise UnsupportedDocumentError("image format is not supported in this release")
-            if original_name:
-                declared = _SUFFIX_FORMATS.get(Path(original_name).suffix.lower())
-                if declared is not None and declared != detected_format:
-                    raise DocumentTypeMismatchError(
-                        f"image extension declares {declared.lower()} but content is "
-                        f"{detected_format.lower()}"
-                    )
-            if frames != 1:
-                raise UnsupportedDocumentError("animated images are not supported in this release")
-            if width <= 0 or height <= 0:
-                raise CorruptDocumentError("image dimensions are invalid")
-            if width > _MAX_WIDTH or height > _MAX_HEIGHT or width * height > _MAX_PIXELS:
-                raise LimitExceededError("image dimensions exceed the safety budget")
-
-            with Image.open(source_path) as opened:
-                opened.load()
-                oriented = ImageOps.exif_transpose(opened)
-                try:
-                    clean = oriented.convert("RGB")
-                finally:
-                    if oriented is not opened:
-                        oriented.close()
-                clean.thumbnail(
-                    (_MAX_MODEL_LONG_SIDE, _MAX_MODEL_LONG_SIDE), Image.Resampling.LANCZOS
-                )
-                clean.info.clear()
-                final_size = clean.size
-                clean.save(output_path, format="PNG", optimize=False)
-                clean.close()
-    except (Image.DecompressionBombWarning, Image.DecompressionBombError) as error:
-        raise LimitExceededError("image dimensions exceed the safety budget") from error
-    except (DocumentTypeMismatchError, LimitExceededError, UnsupportedDocumentError):
-        raise
-    except (OSError, SyntaxError, ValueError) as error:
-        raise CorruptDocumentError("image is corrupt or cannot be decoded") from error
-    return final_size
+    return sanitize_image(
+        source_path,
+        output_path,
+        original_name,
+        max_width=_MAX_WIDTH,
+        max_height=_MAX_HEIGHT,
+        max_pixels=_MAX_PIXELS,
+    )
 
 
 def _sanitize_embedded_image(source_path: Path, output_path: Path) -> tuple[int, int]:
@@ -120,33 +100,88 @@ class ImageParser:
         del options
         if self._vision_config is None or self._vision is None:
             raise VisionRequiredError("standalone images require a vision configuration")
-        output_path = self._runtime.workspace.output_path("sanitized-image.png")
+        prepared = await self._runtime.run_native(
+            prepare_image,
+            source.path,
+            self._runtime.workspace.path,
+            "sanitized-image",
+            source.original_name,
+            "standalone",
+        )
+        paths = prepared_paths(prepared, self._runtime.workspace.path)
         try:
-            width, height = await self._runtime.run_native(
-                _sanitize_image,
-                source.path,
-                output_path,
-                source.original_name,
-            )
+            if bool(prepared.get("skipped")):
+                raise NoUsableContentError("image produced no usable content")
+            width = prepared.get("width")
+            height = prepared.get("height")
+            if not isinstance(width, int) or not isinstance(height, int):
+                raise RuntimeDependencyError("native image worker returned invalid dimensions")
             is_table = width / height >= _ULTRA_WIDE_RATIO
-            result = await self._vision.analyze(
+            prompt = TABLE_IMAGE_PROMPT if is_table else GENERAL_IMAGE_PROMPT
+            kind = VisionRequestKind.TABLE if is_table else VisionRequestKind.PROSE
+            requests = [
                 VisionRequest(
-                    output_path,
-                    TABLE_IMAGE_PROMPT if is_table else GENERAL_IMAGE_PROMPT,
-                    0,
-                    VisionRequestKind.TABLE if is_table else VisionRequestKind.PROSE,
+                    path,
+                    tile_prompt(prompt, index, len(paths)),
+                    index,
+                    kind,
                 )
+                for index, path in enumerate(paths)
+            ]
+            outcomes = await asyncio.gather(
+                *(self._vision.analyze(request) for request in requests),
+                return_exceptions=True,
             )
+
+            results: list[VisionResult | None] = []
+            failures: list[OpenDocsError] = []
+            for outcome in outcomes:
+                if isinstance(outcome, asyncio.CancelledError):
+                    raise outcome
+                if isinstance(outcome, _FATAL_VISUAL_ERRORS):
+                    raise outcome
+                if isinstance(outcome, OpenDocsError):
+                    failures.append(outcome)
+                    results.append(None)
+                elif isinstance(outcome, BaseException):
+                    failures.append(
+                        RuntimeDependencyError(
+                            f"image vision client failed: {type(outcome).__name__}"
+                        )
+                    )
+                    results.append(None)
+                elif isinstance(outcome, VisionResult):
+                    results.append(outcome)
+                else:
+                    failures.append(
+                        RuntimeDependencyError("image vision client returned invalid data")
+                    )
+                    results.append(None)
+            if failures and all(result is None for result in results):
+                raise failures[0]
+            result = merge_tiled_results(prepared, results)
+            blocks: list[TextBlock | TableBlock] = []
+            for element in result.elements:
+                if isinstance(element, VisionTextElement) and element.text.strip():
+                    blocks.append(TextBlock(element.text.strip()))
+                elif isinstance(element, VisionTableElement):
+                    blocks.append(TableBlock(element.grid, element.header_rows))
+            if not blocks:
+                raise NoUsableContentError("image produced no usable content")
+            if is_table and not any(isinstance(block, TableBlock) for block in blocks):
+                raise NoUsableContentError("table image produced no usable table")
+            warnings = (
+                (
+                    WarningRecord(
+                        "image_tile_failed",
+                        f"image: {len(failures)} of {len(requests)} tiles failed",
+                    ),
+                )
+                if failures
+                else ()
+            )
+            return ParsedDocument(DocumentType.IMAGE, tuple(blocks), warnings)
         finally:
-            output_path.unlink(missing_ok=True)
-        blocks: list[TextBlock | TableBlock] = []
-        for element in result.elements:
-            if isinstance(element, VisionTextElement) and element.text.strip():
-                blocks.append(TextBlock(element.text.strip()))
-            elif isinstance(element, VisionTableElement):
-                blocks.append(TableBlock(element.grid, element.header_rows))
-        if not blocks:
-            raise NoUsableContentError("image produced no usable content")
-        if is_table and not any(isinstance(block, TableBlock) for block in blocks):
-            raise NoUsableContentError("table image produced no usable table")
-        return ParsedDocument(DocumentType.IMAGE, tuple(blocks))
+            for path in paths:
+                with suppress(OSError):
+                    path.unlink(missing_ok=True)

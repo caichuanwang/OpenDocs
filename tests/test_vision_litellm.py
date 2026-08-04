@@ -216,6 +216,27 @@ async def test_adapter_plain_prose_allows_markdown_but_table_repairs_once(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "kind",
+    [VisionRequestKind.TABLE, VisionRequestKind.HYBRID_CROP],
+)
+async def test_adapter_accepts_empty_structured_elements(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    kind: VisionRequestKind,
+) -> None:
+    image = tmp_path / "image.png"
+    image.write_bytes(b"png")
+    fake = FakeLiteLLM([json.dumps({"elements": []})], strict=True)
+    monkeypatch.setattr(adapter, "_litellm", lambda: fake)
+    client = adapter.LiteLLMVisionClient(VisionConfig("model"), concurrency=1)
+
+    result = await client.analyze(_request(image, kind))
+
+    assert result.elements == ()
+
+
+@pytest.mark.asyncio
 async def test_adapter_retries_only_transient_failures(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:

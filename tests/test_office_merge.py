@@ -70,6 +70,21 @@ def test_merge_office_document_replays_visual_results_at_every_source_slot() -> 
     )
 
 
+def test_merge_office_document_replays_only_admitted_occurrences() -> None:
+    document = OfficeDocument(
+        DocumentType.PPTX,
+        (OfficePage(1, (_image(0), _image(4))),),
+    )
+    outcome = OfficeVisualOutcome(
+        VisionResult((VisionTextElement("visual", 0),)),
+        occurrences=frozenset({(1, 4)}),
+    )
+
+    merged = merge_office_document(document, {"a" * 64: outcome})
+
+    assert merged.blocks == (PageBreakBlock(1), TextBlock("visual"))
+
+
 def test_merge_pptx_keeps_every_slide_boundary_and_source_order() -> None:
     document = OfficeDocument(
         DocumentType.PPTX,

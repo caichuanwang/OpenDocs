@@ -10,7 +10,12 @@ from PIL import Image  # pyright: ignore[reportMissingImports]
 
 from opendocs._models import BBox, CoordinateTransform, PageBreakBlock, TextBlock
 from opendocs._runtime import ParserRuntime
-from opendocs.errors import ModelInvalidResponseError, NoUsableContentError, VisionRequiredError
+from opendocs.errors import (
+    ModelAuthenticationError,
+    ModelInvalidResponseError,
+    NoUsableContentError,
+    VisionRequiredError,
+)
 from opendocs.options import ParseOptions, VisionConfig
 from opendocs.parsers.pdf.extract import measure_text_quality
 from opendocs.parsers.pdf.models import (
@@ -78,7 +83,12 @@ class FakeRenderer:
         del pdf_path, deadline, use_crop_box
         self.calls.append(page.page_number)
         image_path = self.path / f"fake-page-{page.page_number}.png"
-        Image.new("RGB", (100, 100), "white").save(image_path, "PNG")
+        image = Image.new("RGB", (100, 100), "white")
+        for offset in range(10, 90, 10):
+            for x in range(10, 90):
+                image.putpixel((x, offset), (0, 0, 0))
+        image.save(image_path, "PNG")
+        image.close()
         try:
             yield RenderedPdfPage(image_path, self.transform)
         finally:
@@ -86,6 +96,51 @@ class FakeRenderer:
 
     async def aclose(self) -> None:
         self.close_calls += 1
+
+
+class TallRenderer(FakeRenderer):
+    @asynccontextmanager
+    async def render_page(
+        self,
+        pdf_path: Path,
+        page: PageFacts,
+        *,
+        deadline: float,
+        use_crop_box: bool = True,
+    ) -> AsyncIterator[RenderedPdfPage]:
+        del pdf_path, deadline, use_crop_box
+        self.calls.append(page.page_number)
+        image_path = self.path / f"tall-page-{page.page_number}.png"
+        image = Image.new("RGB", (800, 4000), "white")
+        for y in range(100, 4000, 300):
+            for x in range(50, 750):
+                image.putpixel((x, y), (0, 0, 0))
+        image.save(image_path, "PNG")
+        image.close()
+        transform = CoordinateTransform(BBox(0, 0, 800, 4000), 800, 4000)
+        try:
+            yield RenderedPdfPage(image_path, transform)
+        finally:
+            image_path.unlink(missing_ok=True)
+
+
+class BlankRenderer(FakeRenderer):
+    @asynccontextmanager
+    async def render_page(
+        self,
+        pdf_path: Path,
+        page: PageFacts,
+        *,
+        deadline: float,
+        use_crop_box: bool = True,
+    ) -> AsyncIterator[RenderedPdfPage]:
+        del pdf_path, deadline, use_crop_box
+        image_path = self.path / f"blank-page-{page.page_number}.png"
+        Image.new("RGB", (100, 100), "white").save(image_path, "PNG")
+        try:
+            yield RenderedPdfPage(image_path, self.transform)
+        finally:
+            image_path.unlink(missing_ok=True)
 
 
 class RecordingVision:
@@ -329,6 +384,36 @@ async def test_hybrid_region_partial_failure_keeps_successful_region(
 
 
 @pytest.mark.asyncio
+async def test_hybrid_region_fatal_failure_is_not_degraded_after_success(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    regions = (
+        VisualRegion(BBox(0.1, 0.1, 0.3, 0.3), ("image",), 0),
+        VisualRegion(BBox(0.5, 0.5, 0.7, 0.7), ("image",), 1),
+    )
+    vision = RecordingVision(
+        {
+            10_000: VisionResult((VisionTextElement("success", 0, BBox(0, 0, 1, 1)),)),
+            10_001: ModelAuthenticationError("authentication"),
+        }
+    )
+    renderer = FakeRenderer(tmp_path)
+    parser, runtime, source = await _parser(
+        tmp_path,
+        monkeypatch,
+        (_page(1, text="native", regions=regions),),
+        vision,
+        renderer,
+    )
+    try:
+        with pytest.raises(ModelAuthenticationError):
+            await parser.parse(source, options=ParseOptions())
+    finally:
+        await runtime.aclose()
+
+
+@pytest.mark.asyncio
 async def test_partial_visual_failure_preserves_native_with_stable_warning(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -390,6 +475,106 @@ async def test_full_page_failure_preserves_native_or_is_typed_fatal(
             await parser.parse(source, options=ParseOptions())
     finally:
         await runtime.aclose()
+
+
+@pytest.mark.asyncio
+async def test_full_page_long_image_uses_tiles_and_cleans_up(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    region = VisualRegion(BBox(0, 0, 1, 1), ("image",), 0)
+
+    class TileVision(RecordingVision):
+        async def analyze(self, request: VisionRequest) -> VisionResult:
+            self.requests.append(request)
+            return VisionResult((VisionTextElement(f"tile {request.source_index}", 0),))
+
+    vision = TileVision({})
+    renderer = TallRenderer(tmp_path)
+    parser, runtime, source = await _parser(
+        tmp_path,
+        monkeypatch,
+        (_page(1, regions=(region,), reliable=False),),
+        vision,
+        renderer,
+    )
+    try:
+        result = await parser.parse(source, options=ParseOptions())
+    finally:
+        await runtime.aclose()
+
+    assert len(vision.requests) > 1
+    assert all(request.kind is VisionRequestKind.FULL_PAGE for request in vision.requests)
+    assert [block.text for block in result.blocks if isinstance(block, TextBlock)] == [
+        f"tile {request.source_index}" for request in vision.requests
+    ]
+    assert not tuple(tmp_path.glob("pdf-page-*.png"))
+
+
+@pytest.mark.asyncio
+async def test_hybrid_long_crop_maps_tile_bbox_and_cleans_up(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    region = VisualRegion(BBox(0, 0, 0.5, 1), ("image",), 0)
+
+    class TileVision(RecordingVision):
+        async def analyze(self, request: VisionRequest) -> VisionResult:
+            self.requests.append(request)
+            return VisionResult((VisionTextElement("visual", 0, BBox(0, 0.4, 1, 0.5)),))
+
+    vision = TileVision({})
+    renderer = TallRenderer(tmp_path)
+    parser, runtime, source = await _parser(
+        tmp_path,
+        monkeypatch,
+        (
+            _page(
+                1,
+                native=(_native("kept", BBox(0, 0, 0.01, 0.01)),),
+                text="native",
+                regions=(region,),
+            ),
+        ),
+        vision,
+        renderer,
+    )
+    try:
+        result = await parser.parse(source, options=ParseOptions())
+    finally:
+        await runtime.aclose()
+
+    assert len(vision.requests) > 1
+    assert all(request.kind is VisionRequestKind.HYBRID_CROP for request in vision.requests)
+    assert TextBlock("visual") in result.blocks
+    assert not tuple(tmp_path.glob("pdf-crop-*.png"))
+    assert not tuple(tmp_path.glob("pdf-crop-prepared-*.png"))
+
+
+@pytest.mark.asyncio
+async def test_blank_hybrid_crop_skips_vision_without_full_page_upgrade(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    region = VisualRegion(BBox(0.2, 0.2, 0.4, 0.4), ("image",), 0)
+    native = _native("kept", BBox(0.7, 0.7, 0.8, 0.8))
+    vision = RecordingVision({})
+    renderer = BlankRenderer(tmp_path)
+    parser, runtime, source = await _parser(
+        tmp_path,
+        monkeypatch,
+        (_page(1, native=(native,), text="native", regions=(region,)),),
+        vision,
+        renderer,
+    )
+    try:
+        result = await parser.parse(source, options=ParseOptions())
+    finally:
+        await runtime.aclose()
+
+    assert result.blocks == (PageBreakBlock(1), TextBlock("kept"))
+    assert vision.requests == []
+    assert not tuple(tmp_path.glob("pdf-crop-*.png"))
 
 
 @pytest.mark.asyncio
