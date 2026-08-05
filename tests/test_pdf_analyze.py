@@ -16,11 +16,17 @@ from opendocs.parsers.pdf.analyze import (
     analyze_pdf,
     analyze_pdf_native,
 )
+from opendocs.parsers.pdf.extract import measure_text_quality
 from opendocs.parsers.pdf.models import (
     NativeTableCandidate,
     NativeTextCandidate,
+    PageFacts,
     PageRoute,
     PdfWord,
+    candidate_from_wire,
+    candidate_to_wire,
+    page_from_wire,
+    page_to_wire,
 )
 from opendocs.parsers.pdf.routing import route_page
 from opendocs.source import parse_workspace
@@ -147,6 +153,70 @@ def _minimal_pdf(text: str = "hello") -> bytes:
     return bytes(output)
 
 
+def _positioned_pdf(rows: list[tuple[int, int, str]]) -> bytes:
+    commands = [f"BT /F1 12 Tf {x} {y} Td ({text}) Tj ET" for x, y, text in rows]
+    content = "\n".join(commands).encode()
+    objects = [
+        b"<< /Type /Catalog /Pages 2 0 R >>",
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] "
+        b"/Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>",
+        b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+        b"<< /Length " + str(len(content)).encode() + b" >>\nstream\n" + content + b"\nendstream",
+    ]
+    output = bytearray(b"%PDF-1.4\n")
+    offsets = [0]
+    for index, body in enumerate(objects, start=1):
+        offsets.append(len(output))
+        output.extend(f"{index} 0 obj\n".encode() + body + b"\nendobj\n")
+    xref = len(output)
+    output.extend(f"xref\n0 {len(objects) + 1}\n".encode())
+    output.extend(b"0000000000 65535 f \n")
+    for offset in offsets[1:]:
+        output.extend(f"{offset:010d} 00000 n \n".encode())
+    output.extend(
+        f"trailer\n<< /Size {len(objects) + 1} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n".encode()
+    )
+    return bytes(output)
+
+
+def test_native_text_candidate_wire_preserves_font_metadata() -> None:
+    candidate = NativeTextCandidate(
+        "Heading",
+        BBox(0.1, 0.1, 0.8, 0.2),
+        4,
+        18.5,
+        "Inter-Bold",
+    )
+
+    assert candidate_from_wire(candidate_to_wire(candidate)) == candidate
+
+
+def test_native_page_facts_wire_round_trip_preserves_font_metadata() -> None:
+    word = PdfWord("hello", BBox(0.1, 0.1, 0.8, 0.2), 3, 12.0, "Inter-Regular")
+    candidate = NativeTextCandidate("hello", BBox(0.1, 0.1, 0.8, 0.2), 3, 12.0, "Inter-Regular")
+    page = PageFacts(
+        page_number=2,
+        media_box=BBox(0.0, 0.0, 100.0, 100.0),
+        crop_box=BBox(0.0, 0.0, 100.0, 100.0),
+        rotation=0,
+        display_width=100.0,
+        display_height=100.0,
+        words=(word,),
+        tables=(),
+        native_candidates=(candidate,),
+        visual_regions=(),
+        quality=measure_text_quality("hello"),
+        image_area_ratio=0.0,
+        drawing_object_count=0,
+        native_extraction_failed=False,
+        reading_order_ambiguous=False,
+        native_text_reliable=True,
+    )
+
+    assert page_from_wire(page_to_wire(page)) == page
+
+
 def test_page_analysis_normalizes_content_from_rotated_negative_crop_box() -> None:
     page = FakePage(
         words=[
@@ -199,6 +269,72 @@ def test_valid_table_owns_words_and_borders_do_not_create_visual_region() -> Non
         NativeTextCandidate,
     ]
     assert all(region.reasons != ("dense_drawing",) for region in facts.visual_regions)
+
+
+def test_text_alignment_table_strategy_recovers_borderless_table() -> None:
+    words = [
+        _word("name", 10, 10, 30, 15),
+        _word("value", 60, 10, 80, 15),
+        _word("row-a", 10, 20, 30, 25),
+        _word("1", 60, 20, 80, 25),
+        _word("row-b", 10, 30, 30, 35),
+        _word("2", 60, 30, 80, 35),
+    ]
+
+    facts = _analyze_page(FakePage(words=words), 1)
+
+    assert len(facts.tables) == 1
+    assert facts.tables[0].grid == (
+        ("name", "value"),
+        ("row-a", "1"),
+        ("row-b", "2"),
+    )
+    assert facts.visual_regions == ()
+
+
+def test_real_aligned_paragraph_is_not_misclassified_as_table(tmp_path: Path) -> None:
+    path = tmp_path / "paragraph.pdf"
+    path.write_bytes(
+        _positioned_pdf(
+            [
+                (72, 720, "This is line one"),
+                (72, 700, "This is line two"),
+                (72, 680, "This is line three"),
+            ]
+        )
+    )
+
+    with analyze_module.pdfplumber.open(path) as pdf:
+        facts = _analyze_page(pdf.pages[0], 1)
+
+    assert facts.tables == ()
+    assert any(isinstance(candidate, NativeTextCandidate) for candidate in facts.native_candidates)
+
+
+def test_real_borderless_numeric_table_is_recovered(tmp_path: Path) -> None:
+    path = tmp_path / "borderless-table.pdf"
+    path.write_bytes(
+        _positioned_pdf(
+            [
+                (72, 720, "name"),
+                (300, 720, "value"),
+                (72, 700, "alpha"),
+                (300, 700, "1"),
+                (72, 680, "beta"),
+                (300, 680, "2"),
+            ]
+        )
+    )
+
+    with analyze_module.pdfplumber.open(path) as pdf:
+        facts = _analyze_page(pdf.pages[0], 1)
+
+    assert len(facts.tables) == 1
+    assert facts.tables[0].grid == (
+        ("name", "value"),
+        ("alpha", "1"),
+        ("beta", "2"),
+    )
 
 
 def test_overlapping_nested_and_invalid_tables_are_deterministic() -> None:

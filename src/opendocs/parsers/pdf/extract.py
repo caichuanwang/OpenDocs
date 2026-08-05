@@ -22,7 +22,24 @@ _TABLE_NONEMPTY_RATIO_MIN = 0.30
 _TABLE_UNKNOWN_RATIO_MAX = 0.40
 _TABLE_TEXT_CAPTURE_RATIO_MIN = 0.80
 _TABLE_DUPLICATE_IOU_MIN = 0.80
+_TABLE_NESTED_TEXT_SIMILARITY_MIN = 0.80
 _CID_PATTERN = re.compile(r"\(cid:\d+\)")
+_CJK_RANGES = (
+    (0x2E80, 0x9FFF),
+    (0xF900, 0xFAFF),
+    (0x20000, 0x2FA1F),
+)
+_LINE_CENTER_TOLERANCE = 0.55
+_LINE_SPLIT_GAP_FACTOR = 2.5
+_MAX_ACTIVE_LINES = 64
+_COLUMN_GAP_MIN = 0.12
+_COLUMN_OVERLAP_MIN = 0.20
+_WIDE_BLOCK_WIDTH_MIN = 0.70
+_HEURISTIC_TABLE_MAX_WORDS = 500
+_HEURISTIC_TABLE_MIN_ROWS = 3
+_HEURISTIC_TABLE_MIN_COLUMNS = 2
+_HEURISTIC_TABLE_COLUMN_TOLERANCE = 0.025
+_HEURISTIC_TABLE_NUMERIC_RATIO_MIN = 0.40
 
 
 def bbox_area(bbox: BBox) -> float:
@@ -88,8 +105,14 @@ def measure_text_quality(text: str) -> TextQuality:
     denominator = max(len(characters), 1)
     bad_indexes: set[int] = set()
     for index, character in enumerate(text):
-        if character == "�" or (
-            unicodedata.category(character) == "Cc" and character not in "\t\n\r"
+        category = unicodedata.category(character)
+        value = ord(character)
+        if (
+            character == "�"
+            or (category == "Cc" and character not in "\t\n\r")
+            or category == "Cs"
+            or value & 0xFFFF in {0xFFFE, 0xFFFF}
+            or 0xFDD0 <= value <= 0xFDEF
         ):
             bad_indexes.add(index)
     for match in _CID_PATTERN.finditer(text):
@@ -185,12 +208,44 @@ def is_table_valid(candidate: NativeTableCandidate) -> bool:
     return bool(
         candidate.grid
         and widths
-        and min(widths) > 0
+        and min(widths) >= 2
+        and len(candidate.grid) >= 2
         and len(widths) == 1
         and candidate.nonempty_ratio >= _TABLE_NONEMPTY_RATIO_MIN
         and candidate.unknown_ratio <= _TABLE_UNKNOWN_RATIO_MAX
         and candidate.text_capture_ratio >= _TABLE_TEXT_CAPTURE_RATIO_MIN
     )
+
+
+def _table_text_similarity(left: NativeTableCandidate, right: NativeTableCandidate) -> float:
+    left_text = Counter(
+        character
+        for row in left.grid
+        for cell in row
+        if cell is not None
+        for character in cell
+        if not character.isspace()
+    )
+    right_text = Counter(
+        character
+        for row in right.grid
+        for cell in row
+        if cell is not None
+        for character in cell
+        if not character.isspace()
+    )
+    shared = sum((left_text & right_text).values())
+    return shared / max(min(sum(left_text.values()), sum(right_text.values())), 1)
+
+
+def _tables_are_duplicates(
+    left: NativeTableCandidate,
+    right: NativeTableCandidate,
+) -> bool:
+    if intersection_over_union(left.bbox, right.bbox) >= _TABLE_DUPLICATE_IOU_MIN:
+        return True
+    nested = bbox_contains(left.bbox, right.bbox) or bbox_contains(right.bbox, left.bbox)
+    return nested and _table_text_similarity(left, right) >= _TABLE_NESTED_TEXT_SIMILARITY_MIN
 
 
 def select_canonical_tables(
@@ -208,12 +263,7 @@ def select_canonical_tables(
     )
     accepted: list[NativeTableCandidate] = []
     for candidate in ordered:
-        if any(
-            bbox_contains(existing.bbox, candidate.bbox)
-            or bbox_contains(candidate.bbox, existing.bbox)
-            or intersection_over_union(existing.bbox, candidate.bbox) >= _TABLE_DUPLICATE_IOU_MIN
-            for existing in accepted
-        ):
+        if any(_tables_are_duplicates(existing, candidate) for existing in accepted):
             continue
         accepted.append(candidate)
     return tuple(
@@ -228,6 +278,260 @@ def _line_key(word: PdfWord) -> tuple[float, float, int]:
     return word.bbox.top, word.bbox.left, word.source_index
 
 
+def _is_cjk(character: str) -> bool:
+    value = ord(character)
+    return any(start <= value <= end for start, end in _CJK_RANGES)
+
+
+def _word_separator(left: PdfWord, right: PdfWord) -> str:
+    if not left.text or not right.text:
+        return ""
+    if _is_cjk(left.text[-1]) or _is_cjk(right.text[0]):
+        return ""
+    if right.text[0] in ",.;:!?)]}%" or left.text[-1] in "([{$/":
+        return ""
+    return " "
+
+
+def _same_line(left: PdfWord, right: PdfWord) -> bool:
+    left_center = (left.bbox.top + left.bbox.bottom) / 2
+    right_center = (right.bbox.top + right.bbox.bottom) / 2
+    height = min(left.bbox.bottom - left.bbox.top, right.bbox.bottom - right.bbox.top)
+    return abs(left_center - right_center) <= max(height * _LINE_CENTER_TOLERANCE, 0.002)
+
+
+def _line_word_groups(words: Sequence[PdfWord]) -> list[list[PdfWord]]:
+    lines: list[list[PdfWord]] = []
+    for word in sorted(words, key=_line_key):
+        matched = False
+        for line in reversed(lines[-_MAX_ACTIVE_LINES:]):
+            if _same_line(line[0], word):
+                line.append(word)
+                matched = True
+                break
+            if word.bbox.top - line[0].bbox.bottom > 0.02:
+                break
+        if not matched:
+            lines.append([word])
+    return [sorted(line, key=lambda item: (item.bbox.left, item.source_index)) for line in lines]
+
+
+def _word_groups(words: Sequence[PdfWord]) -> list[list[PdfWord]]:
+    groups: list[list[PdfWord]] = []
+    for ordered in _line_word_groups(words):
+        current: list[PdfWord] = []
+        for word in ordered:
+            if current:
+                previous = current[-1]
+                typical_height = max(previous.bbox.bottom - previous.bbox.top, 0.001)
+                if word.bbox.left - previous.bbox.right > typical_height * _LINE_SPLIT_GAP_FACTOR:
+                    groups.append(current)
+                    current = []
+            current.append(word)
+        if current:
+            groups.append(current)
+    return groups
+
+
+def _line_candidate(words: Sequence[PdfWord]) -> NativeTextCandidate:
+    ordered = sorted(words, key=lambda word: (word.bbox.left, word.source_index))
+    text = ordered[0].text
+    for left, right in pairwise(ordered):
+        text += _word_separator(left, right) + right.text
+    font_sizes = [word.font_size for word in ordered if word.font_size is not None]
+    font_names = [word.font_name for word in ordered if word.font_name]
+    font_size = sum(font_sizes) / len(font_sizes) if font_sizes else None
+    font_name = Counter(font_names).most_common(1)[0][0] if font_names else None
+    return NativeTextCandidate(
+        text=text,
+        bbox=BBox(
+            min(word.bbox.left for word in ordered),
+            min(word.bbox.top for word in ordered),
+            max(word.bbox.right for word in ordered),
+            max(word.bbox.bottom for word in ordered),
+        ),
+        source_index=min(word.source_index for word in ordered),
+        font_size=font_size,
+        font_name=font_name,
+    )
+
+
+def _column_order_narrow(
+    candidates: Sequence[NativeTextCandidate],
+) -> list[NativeTextCandidate]:
+    if len(candidates) < 2:
+        return list(candidates)
+
+    def fallback() -> list[NativeTextCandidate]:
+        return sorted(
+            candidates,
+            key=lambda item: (item.bbox.top, item.bbox.left, item.source_index),
+        )
+
+    ordered = sorted(candidates, key=lambda item: (item.bbox.left, item.bbox.top))
+    columns: list[tuple[float, float, list[NativeTextCandidate]]] = []
+    for candidate in ordered:
+        for index, (column_left, column_right, column) in enumerate(columns):
+            overlap = max(
+                0.0,
+                min(column_right, candidate.bbox.right) - max(column_left, candidate.bbox.left),
+            )
+            narrower = min(column_right - column_left, candidate.bbox.right - candidate.bbox.left)
+            if overlap / max(narrower, 0.001) >= _COLUMN_OVERLAP_MIN:
+                column.append(candidate)
+                columns[index] = (
+                    min(column_left, candidate.bbox.left),
+                    max(column_right, candidate.bbox.right),
+                    column,
+                )
+                break
+        else:
+            columns.append((candidate.bbox.left, candidate.bbox.right, [candidate]))
+            if len(columns) > 2:
+                return fallback()
+
+    left_right = sorted(columns, key=lambda item: item[0])
+    if len(left_right) != 2 or left_right[1][0] - left_right[0][1] < _COLUMN_GAP_MIN:
+        return fallback()
+    return [
+        item
+        for _, _, column in left_right
+        for item in sorted(
+            column,
+            key=lambda value: (value.bbox.top, value.bbox.left, value.source_index),
+        )
+    ]
+
+
+def _column_order(candidates: Sequence[NativeTextCandidate]) -> list[NativeTextCandidate]:
+    if len(candidates) < 2:
+        return list(candidates)
+
+    wide = sorted(
+        (
+            candidate
+            for candidate in candidates
+            if candidate.bbox.right - candidate.bbox.left >= _WIDE_BLOCK_WIDTH_MIN
+        ),
+        key=lambda item: (item.bbox.top, item.bbox.left, item.source_index),
+    )
+    if wide:
+        narrow = [candidate for candidate in candidates if candidate not in wide]
+        result: list[NativeTextCandidate] = []
+        for spanning in wide:
+            before = [candidate for candidate in narrow if candidate.bbox.top < spanning.bbox.top]
+            result.extend(_column_order_narrow(before))
+            narrow = [candidate for candidate in narrow if candidate not in before]
+            result.append(spanning)
+        result.extend(_column_order_narrow(narrow))
+        return result
+    return _column_order_narrow(candidates)
+
+
+def _numeric_cell(text: str) -> bool:
+    normalized = text.strip().replace(",", "").replace("%", "")
+    normalized = normalized.removeprefix("$").removeprefix("¥").removeprefix("€")
+    normalized = normalized.strip("()")
+    try:
+        float(normalized)
+    except ValueError:
+        return False
+    return True
+
+
+def detect_heuristic_table(words: Sequence[PdfWord]) -> NativeTableCandidate | None:
+    if not words or len(words) > _HEURISTIC_TABLE_MAX_WORDS:
+        return None
+    lines = [line for line in _line_word_groups(words) if len(line) >= 2]
+    if len(lines) < _HEURISTIC_TABLE_MIN_ROWS:
+        return None
+
+    clusters: list[list[float]] = []
+    for word in sorted(words, key=lambda item: item.bbox.left):
+        for cluster in clusters:
+            anchor = sum(cluster) / len(cluster)
+            if abs(word.bbox.left - anchor) <= _HEURISTIC_TABLE_COLUMN_TOLERANCE:
+                cluster.append(word.bbox.left)
+                break
+        else:
+            clusters.append([word.bbox.left])
+    anchors = sorted(
+        sum(cluster) / len(cluster)
+        for cluster in clusters
+        if len(cluster) >= _HEURISTIC_TABLE_MIN_ROWS
+    )
+    if not _HEURISTIC_TABLE_MIN_COLUMNS <= len(anchors) <= 8:
+        return None
+
+    grid: list[list[str | None]] = []
+    for line in lines:
+        row: list[list[str]] = [[] for _ in anchors]
+        for word in line:
+            distances = [abs(word.bbox.left - anchor) for anchor in anchors]
+            column = min(range(len(anchors)), key=distances.__getitem__)
+            if distances[column] <= _HEURISTIC_TABLE_COLUMN_TOLERANCE:
+                row[column].append(word.text)
+        cells = [" ".join(parts) if parts else None for parts in row]
+        if sum(bool(cell) for cell in cells) >= _HEURISTIC_TABLE_MIN_COLUMNS:
+            grid.append(cells)
+    if len(grid) < _HEURISTIC_TABLE_MIN_ROWS:
+        return None
+
+    data_cells = [cell for row in grid[1:] for cell in row if cell]
+    numeric_ratio = sum(_numeric_cell(cell) for cell in data_cells) / max(len(data_cells), 1)
+    if numeric_ratio < _HEURISTIC_TABLE_NUMERIC_RATIO_MIN:
+        return None
+
+    bbox = BBox(
+        min(word.bbox.left for word in words),
+        min(word.bbox.top for word in words),
+        max(word.bbox.right for word in words),
+        max(word.bbox.bottom for word in words),
+    )
+    candidate = build_table_candidate(
+        bbox=bbox,
+        raw_grid=grid,
+        words=words,
+        source_index=0,
+    )
+    return candidate if is_table_valid(candidate) else None
+
+
+def build_native_text_lines(
+    candidates: Sequence[NativeTextCandidate],
+) -> tuple[NativeTextCandidate, ...]:
+    words = tuple(
+        PdfWord(
+            candidate.text,
+            candidate.bbox,
+            candidate.source_index,
+            candidate.font_size,
+            candidate.font_name,
+        )
+        for candidate in candidates
+    )
+    return tuple(_column_order([_line_candidate(group) for group in _word_groups(words)]))
+
+
+def _ordered_words(words: Sequence[PdfWord]) -> list[PdfWord]:
+    groups = _word_groups(words)
+    group_by_source = {
+        min(word.source_index for word in group): sorted(
+            group,
+            key=lambda word: (word.bbox.left, word.source_index),
+        )
+        for group in groups
+    }
+    ordered_lines = _column_order([_line_candidate(group) for group in groups])
+    return [word for line in ordered_lines for word in group_by_source.get(line.source_index, ())]
+
+
+def _same_layout_column(left: BBox, right: BBox) -> bool:
+    overlap = max(0.0, min(left.right, right.right) - max(left.left, right.left))
+    narrower = min(left.right - left.left, right.right - right.left)
+    return overlap / max(narrower, 0.001) >= _COLUMN_OVERLAP_MIN
+
+
 def build_native_candidates(
     words: Sequence[PdfWord], tables: Sequence[NativeTableCandidate]
 ) -> tuple[NativeCandidate, ...]:
@@ -235,20 +539,40 @@ def build_native_candidates(
         word
         for word in words
         if not any(bbox_contains_center(table.bbox, word.bbox) for table in tables)
+        and word.text.strip()
     ]
-    candidates: list[NativeCandidate] = [
-        NativeTextCandidate(word.text, word.bbox, word.source_index)
-        for word in sorted(owned_words, key=_line_key)
-        if word.text.strip()
-    ]
-    candidates.extend(tables)
-    return tuple(
-        sorted(
-            candidates,
-            key=lambda candidate: (
-                candidate.bbox.top,
-                candidate.bbox.left,
-                candidate.source_index,
-            ),
+    ordered: list[NativeCandidate] = [
+        NativeTextCandidate(
+            word.text,
+            word.bbox,
+            word.source_index,
+            word.font_size,
+            word.font_name,
         )
-    )
+        for word in _ordered_words(owned_words)
+    ]
+    for table in sorted(
+        tables,
+        key=lambda candidate: (
+            candidate.bbox.top,
+            candidate.bbox.left,
+            candidate.source_index,
+        ),
+    ):
+        spanning = table.bbox.right - table.bbox.left >= _WIDE_BLOCK_WIDTH_MIN
+        if spanning:
+            before = [candidate for candidate in ordered if candidate.bbox.bottom <= table.bbox.top]
+            after = [candidate for candidate in ordered if candidate not in before]
+            ordered = [*before, table, *after]
+            continue
+        same_column = [
+            index
+            for index, candidate in enumerate(ordered)
+            if _same_layout_column(candidate.bbox, table.bbox)
+        ]
+        insert_at = next(
+            (index for index in same_column if ordered[index].bbox.top >= table.bbox.top),
+            same_column[-1] + 1 if same_column else len(ordered),
+        )
+        ordered.insert(insert_at, table)
+    return tuple(ordered)

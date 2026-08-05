@@ -3,15 +3,8 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
-from opendocs._models import (
-    BBox,
-    Block,
-    PageBreakBlock,
-    TableBlock,
-    TextBlock,
-    WarningRecord,
-)
-from opendocs.parsers.pdf.extract import intersection_area
+from opendocs._models import BBox, Block, PageBreakBlock, TableBlock, TextBlock, WarningRecord
+from opendocs.parsers.pdf.extract import bbox_contains_center, build_native_text_lines
 from opendocs.parsers.pdf.models import (
     NativeCandidate,
     NativeTableCandidate,
@@ -19,6 +12,7 @@ from opendocs.parsers.pdf.models import (
     PageFacts,
     PageRoute,
 )
+from opendocs.parsers.pdf.semantics import body_font_size, edge_suppressions, structured_native_run
 from opendocs.vision.base import VisionElement, VisionTableElement, VisionTextElement
 
 PAGE_NORMALIZED_V1 = "page-normalized-v1"
@@ -49,10 +43,6 @@ def _visual_bbox(element: VisionElement, *, required: bool) -> BBox | None:
     return bbox.require_normalized("visual bbox")
 
 
-def _intersects(left: BBox, right: BBox) -> bool:
-    return intersection_area(left, right) > 0
-
-
 def _native_tables_own_text(candidates: tuple[NativeCandidate, ...]) -> tuple[NativeCandidate, ...]:
     table_boxes = tuple(
         candidate.bbox for candidate in candidates if isinstance(candidate, NativeTableCandidate)
@@ -62,7 +52,7 @@ def _native_tables_own_text(candidates: tuple[NativeCandidate, ...]) -> tuple[Na
         for candidate in candidates
         if not (
             isinstance(candidate, NativeTextCandidate)
-            and any(_intersects(candidate.bbox, table_bbox) for table_bbox in table_boxes)
+            and any(bbox_contains_center(table_bbox, candidate.bbox) for table_bbox in table_boxes)
         )
     )
 
@@ -79,17 +69,8 @@ def _visual_tables_own_text(elements: tuple[VisionElement, ...]) -> tuple[Vision
         if not (
             isinstance(element, VisionTextElement)
             and element.bbox is not None
-            and any(_intersects(element.bbox, table_bbox) for table_bbox in table_boxes)
+            and any(bbox_contains_center(table_bbox, element.bbox) for table_bbox in table_boxes)
         )
-    )
-
-
-def _candidate_key(candidate: NativeCandidate) -> tuple[float, float, int, int]:
-    return (
-        candidate.bbox.top,
-        candidate.bbox.left,
-        candidate.source_index,
-        0 if isinstance(candidate, NativeTableCandidate) else 1,
     )
 
 
@@ -115,37 +96,158 @@ def _visual_block(element: VisionElement) -> Block:
     return TextBlock(element.text)
 
 
-def _page_blocks(page: PageFacts, visual: PageVisionResult | None) -> tuple[Block, ...]:
-    native_candidates = _native_tables_own_text(page.native_candidates)
-    if visual is None:
-        return tuple(
-            _native_block(candidate) for candidate in sorted(native_candidates, key=_candidate_key)
-        )
+def _item_bbox(item: NativeCandidate | VisionElement) -> BBox | None:
+    return item.bbox
 
-    elements = _visual_tables_own_text(visual.elements)
-    if visual.route is PageRoute.FULL_VISION:
-        return tuple(_visual_block(element) for element in sorted(elements, key=_element_key))
-    if visual.route is not PageRoute.HYBRID:
-        return tuple(
-            _native_block(candidate) for candidate in sorted(native_candidates, key=_candidate_key)
-        )
-    if visual.coordinate_space != PAGE_NORMALIZED_V1:
-        raise ValueError("hybrid merge requires page-normalized-v1 visual coordinates")
 
-    visual_boxes = tuple(_visual_bbox(element, required=True) for element in elements)
-    native = tuple(
+def _layout_columns(
+    items: list[NativeCandidate | VisionElement],
+) -> list[list[int]] | None:
+    columns: list[tuple[float, float, list[int]]] = []
+    for index, item in enumerate(items):
+        bbox = _item_bbox(item)
+        if bbox is None or bbox.right - bbox.left >= 0.70:
+            continue
+        for column_index, (left, right, indexes) in enumerate(columns):
+            overlap = max(0.0, min(right, bbox.right) - max(left, bbox.left))
+            narrower = min(right - left, bbox.right - bbox.left)
+            if overlap / max(narrower, 0.001) >= 0.20:
+                indexes.append(index)
+                columns[column_index] = (min(left, bbox.left), max(right, bbox.right), indexes)
+                break
+        else:
+            columns.append((bbox.left, bbox.right, [index]))
+            if len(columns) > 2:
+                return None
+    columns.sort(key=lambda column: column[0])
+    if (
+        len(columns) != 2
+        or sum(len(column[2]) for column in columns) < 3
+        or columns[1][0] - columns[0][1] < 0.12
+    ):
+        return None
+    return [column[2] for column in columns]
+
+
+def _insert_visual_item(
+    items: list[NativeCandidate | VisionElement],
+    element: VisionElement,
+    bbox: BBox,
+) -> list[NativeCandidate | VisionElement]:
+    if bbox.right - bbox.left >= 0.70:
+        before = [
+            item
+            for item in items
+            if (item_bbox := _item_bbox(item)) is not None and item_bbox.bottom <= bbox.top
+        ]
+        after = [item for item in items if item not in before]
+        return [*before, element, *after]
+
+    columns = _layout_columns(items)
+    if columns is not None:
+        overlaps = []
+        for indexes in columns:
+            column_boxes = [
+                item_bbox
+                for index in indexes
+                if (item_bbox := _item_bbox(items[index])) is not None
+            ]
+            left = min(box.left for box in column_boxes)
+            right = max(box.right for box in column_boxes)
+            overlaps.append(max(0.0, min(right, bbox.right) - max(left, bbox.left)))
+        target = max(range(len(columns)), key=overlaps.__getitem__)
+        if overlaps[target] > 0:
+            target_indexes = columns[target]
+            insert_at = next(
+                (
+                    index
+                    for index in target_indexes
+                    if (item_bbox := _item_bbox(items[index])) is not None
+                    and item_bbox.top >= bbox.top
+                ),
+                target_indexes[-1] + 1,
+            )
+            items.insert(insert_at, element)
+            return items
+
+    insert_at = next(
+        (
+            index
+            for index, item in enumerate(items)
+            if (item_bbox := _item_bbox(item)) is not None and item_bbox.top >= bbox.top
+        ),
+        len(items),
+    )
+    items.insert(insert_at, element)
+    return items
+
+
+def _page_blocks(
+    page: PageFacts,
+    visual: PageVisionResult | None,
+    *,
+    suppressed: set[tuple[int, int]],
+    body_size: float | None,
+) -> tuple[Block, ...]:
+    native_candidates = tuple(
         candidate
-        for candidate in native_candidates
-        if not any(
-            visual_bbox is not None and _intersects(candidate.bbox, visual_bbox)
-            for visual_bbox in visual_boxes
+        for candidate in _native_tables_own_text(page.native_candidates)
+        if not (
+            isinstance(candidate, NativeTextCandidate)
+            and (page.page_number, candidate.source_index) in suppressed
         )
     )
-    candidates: list[tuple[float, float, int, int, Block]] = [
-        (*_candidate_key(candidate), _native_block(candidate)) for candidate in native
-    ]
-    candidates.extend((*_element_key(element), _visual_block(element)) for element in elements)
-    return tuple(item[-1] for item in sorted(candidates, key=lambda item: item[:-1]))
+    if visual is not None and visual.route is PageRoute.FULL_VISION:
+        elements = _visual_tables_own_text(visual.elements)
+        return tuple(_visual_block(element) for element in sorted(elements, key=_element_key))
+
+    items: list[NativeCandidate | VisionElement] = list(native_candidates)
+    if visual is not None and visual.route is PageRoute.HYBRID:
+        if visual.coordinate_space != PAGE_NORMALIZED_V1:
+            raise ValueError("hybrid merge requires page-normalized-v1 visual coordinates")
+        elements = _visual_tables_own_text(visual.elements)
+        visual_boxes = tuple(_visual_bbox(element, required=True) for element in elements)
+        items = [
+            candidate
+            for candidate in items
+            if not (
+                isinstance(candidate, NativeTextCandidate)
+                and any(
+                    visual_bbox is not None and bbox_contains_center(visual_bbox, candidate.bbox)
+                    for visual_bbox in visual_boxes
+                )
+            )
+        ]
+        for element in sorted(elements, key=_element_key):
+            visual_bbox = _visual_bbox(element, required=True)
+            if visual_bbox is None:
+                raise AssertionError("required visual bbox disappeared")
+            items = _insert_visual_item(items, element, visual_bbox)
+
+    blocks: list[Block] = []
+    native_run: list[NativeTextCandidate] = []
+
+    def flush_native() -> None:
+        if not native_run:
+            return
+        blocks.extend(
+            structured_native_run(
+                list(build_native_text_lines(native_run)),
+                body_size=body_size,
+            )
+        )
+        native_run.clear()
+
+    for item in items:
+        if isinstance(item, NativeTextCandidate):
+            native_run.append(item)
+            continue
+        flush_native()
+        blocks.append(
+            _native_block(item) if isinstance(item, NativeTableCandidate) else _visual_block(item)
+        )
+    flush_native()
+    return tuple(blocks)
 
 
 _PAGE_WARNING = re.compile(r"^PDF page (\d+):")
@@ -168,13 +270,22 @@ def merge_pdf_pages(
     if len(visual_slots) != len(visual_results) or not set(visual_slots) <= set(page_slots):
         raise ValueError("PDF visual results must map to unique analyzed pages")
 
+    ordered_pages = tuple(page_slots[number] for number in sorted(page_slots))
+    suppressed = edge_suppressions(ordered_pages)
+    body_size = body_font_size(ordered_pages, suppressed)
     blocks: list[Block] = []
     warnings = list(document_warnings)
-    for page_number in sorted(page_slots):
-        page = page_slots[page_number]
-        visual = visual_slots.get(page_number)
-        blocks.append(PageBreakBlock(page_number))
-        blocks.extend(_page_blocks(page, visual))
+    for page in ordered_pages:
+        visual = visual_slots.get(page.page_number)
+        blocks.append(PageBreakBlock(page.page_number))
+        blocks.extend(
+            _page_blocks(
+                page,
+                visual,
+                suppressed=suppressed,
+                body_size=body_size,
+            )
+        )
         if visual is not None:
             warnings.extend(visual.warnings)
     warnings.sort(key=_warning_key)

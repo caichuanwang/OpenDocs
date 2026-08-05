@@ -17,6 +17,7 @@ from opendocs.parsers.pdf.extract import (
     bbox_contains_center,
     build_native_candidates,
     build_table_candidate,
+    detect_heuristic_table,
     is_table_valid,
     is_text_reliable,
     measure_text_quality,
@@ -308,7 +309,7 @@ def _wire_estimate(
     object_bbox_count: int = 0,
 ) -> int:
     estimate = sum(
-        _WIRE_WORD_OVERHEAD + len(word.text) * 8 + len(word.font_name or "") * 4 for word in words
+        _WIRE_WORD_OVERHEAD + len(word.text) * 8 + len(word.font_name or "") * 8 for word in words
     )
     for table in tables:
         estimate += _WIRE_TABLE_OVERHEAD
@@ -352,6 +353,10 @@ def _analyze_page(page: Any, page_number: int) -> PageFacts:
     all_tables, table_failed = _tables(page, words, geometry)
     _enforce_wire_budget(words, all_tables)
     accepted_tables = select_canonical_tables(all_tables)
+    if not accepted_tables:
+        heuristic_table = detect_heuristic_table(words)
+        if heuristic_table is not None:
+            accepted_tables = (heuristic_table,)
     native_candidates = build_native_candidates(words, accepted_tables)
     all_text = " ".join(word.text for word in words)
     quality = measure_text_quality(all_text)
