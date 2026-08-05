@@ -8,7 +8,18 @@ from pathlib import Path
 import pytest  # pyright: ignore[reportMissingImports]
 from PIL import Image  # pyright: ignore[reportMissingImports]
 
-from opendocs._models import BBox, CoordinateTransform, PageBreakBlock, TextBlock
+from opendocs._models import (
+    BBox,
+    CoordinateTransform,
+    HeadingBlock,
+    InlineText,
+    ListItemBlock,
+    ListKind,
+    MarkdownBlock,
+    PageBreakBlock,
+    ParagraphBlock,
+    TextBlock,
+)
 from opendocs._runtime import ParserRuntime
 from opendocs.errors import (
     ModelAuthenticationError,
@@ -24,7 +35,7 @@ from opendocs.parsers.pdf.models import (
     PdfAnalysis,
     VisualRegion,
 )
-from opendocs.parsers.pdf.parser import PDFParser
+from opendocs.parsers.pdf.parser import PDFParser, _has_semantic_blocks
 from opendocs.parsers.pdf.render import RenderedPdfPage
 from opendocs.source import ParseWorkspace, ResolvedSource
 from opendocs.vision.base import VisionRequest, VisionRequestKind, VisionResult, VisionTextElement
@@ -178,6 +189,16 @@ async def _parser(
         renderer=renderer,
     )
     return parser, runtime, ResolvedSource(source_path, source_path.name, False)
+
+
+def test_pdf_semantic_blocks_count_as_usable_content() -> None:
+    inline = (InlineText("content"),)
+
+    assert _has_semantic_blocks((HeadingBlock(1, inline),))
+    assert _has_semantic_blocks((ParagraphBlock(inline),))
+    assert _has_semantic_blocks((ListItemBlock(0, 0, ListKind.BULLET, 1, inline),))
+    assert _has_semantic_blocks((MarkdownBlock("```\ncode\n```"),))
+    assert not _has_semantic_blocks((MarkdownBlock(""),))
 
 
 @pytest.mark.asyncio

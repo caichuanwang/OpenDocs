@@ -10,6 +10,10 @@ from typing import Protocol
 from opendocs._models import (
     BBox,
     DocumentType,
+    HeadingBlock,
+    ListItemBlock,
+    MarkdownBlock,
+    ParagraphBlock,
     ParsedDocument,
     TableBlock,
     TextBlock,
@@ -130,6 +134,13 @@ def _map_crop_element(element: VisionElement, crop_bbox: BBox) -> VisionElement:
 def _has_semantic_blocks(blocks: tuple[object, ...]) -> bool:
     for block in blocks:
         if isinstance(block, TextBlock) and block.text.strip():
+            return True
+        if isinstance(block, MarkdownBlock) and block.markdown.strip():
+            return True
+        if isinstance(block, ParagraphBlock | HeadingBlock | ListItemBlock) and any(
+            getattr(inline, "text", "").strip() or getattr(inline, "label", "").strip()
+            for inline in block.inlines
+        ):
             return True
         if isinstance(block, TableBlock) and any(
             cell.strip() for row in block.grid for cell in row

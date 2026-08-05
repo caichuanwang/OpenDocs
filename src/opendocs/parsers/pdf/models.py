@@ -35,6 +35,8 @@ class NativeTextCandidate:
     text: str
     bbox: BBox
     source_index: int
+    font_size: float | None = None
+    font_name: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -182,6 +184,8 @@ def candidate_to_wire(candidate: NativeCandidate) -> dict[str, object]:
             "text": candidate.text,
             "bbox": bbox_to_wire(candidate.bbox),
             "source_index": candidate.source_index,
+            "font_size": candidate.font_size,
+            "font_name": candidate.font_name,
         },
     }
 
@@ -199,6 +203,8 @@ def candidate_from_wire(value: object) -> NativeCandidate:
         text=str(payload["text"]),
         bbox=bbox_from_wire(payload["bbox"]),
         source_index=int(payload["source_index"]),
+        font_size=(float(payload["font_size"]) if payload.get("font_size") is not None else None),
+        font_name=str(payload["font_name"]) if payload.get("font_name") is not None else None,
     )
 
 

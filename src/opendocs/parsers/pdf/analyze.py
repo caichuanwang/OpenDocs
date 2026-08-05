@@ -1,14 +1,15 @@
 from __future__ import annotations
 
+import re
 from collections.abc import Sequence
 from pathlib import Path
 from typing import Any, cast
 
-import pdfplumber
-from pdfminer.pdfdocument import PDFPasswordIncorrect
+from pdfminer.pdfdocument import PDFDocument, PDFPasswordIncorrect
 from pdfminer.pdfexceptions import PDFException
+from pdfminer.pdfpage import PDFPage
+from pdfminer.pdfparser import PDFParser as PDFMinerParser
 from pdfminer.pdfparser import PDFSyntaxError
-from pdfplumber.utils.exceptions import MalformedPDFException, PdfminerException
 
 from opendocs._models import BBox, CoordinateTransform
 from opendocs._runtime import ParserRuntime
@@ -17,6 +18,7 @@ from opendocs.parsers.pdf.extract import (
     bbox_contains_center,
     build_native_candidates,
     build_table_candidate,
+    detect_heuristic_table,
     is_table_valid,
     is_text_reliable,
     measure_text_quality,
@@ -38,9 +40,10 @@ from opendocs.parsers.pdf.routing import (
     significant_image,
 )
 
-# This stays well below the native protocol's 8 MiB inline-value limit. The estimate is
-# deliberately conservative because words are represented in multiple page collections.
-_MAX_NATIVE_WIRE_ESTIMATE = 3 * 1024 * 1024
+# Aligned with the native protocol's 8 MiB inline-value limit. The estimate is deliberately
+# conservative (words are represented in multiple page collections and UTF-8 is bounded at
+# four bytes per code point), but measured frames stay well below the estimate.
+_MAX_NATIVE_WIRE_ESTIMATE = 8 * 1024 * 1024
 _MAX_NATIVE_WORDS = 10_000
 _MAX_NATIVE_TEXT_CHARS = 1_000_000
 _MAX_NATIVE_TABLES = 1_000
@@ -308,7 +311,7 @@ def _wire_estimate(
     object_bbox_count: int = 0,
 ) -> int:
     estimate = sum(
-        _WIRE_WORD_OVERHEAD + len(word.text) * 8 + len(word.font_name or "") * 4 for word in words
+        _WIRE_WORD_OVERHEAD + len(word.text) * 8 + len(word.font_name or "") * 8 for word in words
     )
     for table in tables:
         estimate += _WIRE_TABLE_OVERHEAD
@@ -352,6 +355,10 @@ def _analyze_page(page: Any, page_number: int) -> PageFacts:
     all_tables, table_failed = _tables(page, words, geometry)
     _enforce_wire_budget(words, all_tables)
     accepted_tables = select_canonical_tables(all_tables)
+    if not accepted_tables:
+        heuristic_table = detect_heuristic_table(words)
+        if heuristic_table is not None:
+            accepted_tables = (heuristic_table,)
     native_candidates = build_native_candidates(words, accepted_tables)
     all_text = " ".join(word.text for word in words)
     quality = measure_text_quality(all_text)
@@ -439,6 +446,143 @@ def _page_dimension(page: Any, name: str) -> float:
         return 1.0
 
 
+# Text-showing operators in PDF content streams. `Do` is deliberately excluded: it paints
+# an image and marks a scanned page, not a text layer. `ET` is included because any real
+# text block opens with BT and closes with ET, making false negatives unlikely; false
+# positives are safe because they only skip the fast path.
+_TEXT_OPERATOR_RE = re.compile(rb"(?:^|[^A-Za-z])(?:Tj|TJ|'|\"|ET)(?:$|[^A-Za-z])")
+
+
+def _page_streams(page: Any) -> list[Any]:
+    contents = getattr(page, "contents", None)
+    if contents is None:
+        return []
+    return contents if isinstance(contents, list) else [contents]
+
+
+def _page_has_text_operators(page: Any) -> bool:
+    for stream in _page_streams(page):
+        try:
+            data = stream.get_data()
+        except Exception:
+            # Conservative: an undecodable stream may contain text.
+            return True
+        if _TEXT_OPERATOR_RE.search(data):
+            return True
+    return False
+
+
+def _page_is_blank(page: Any) -> bool:
+    for stream in _page_streams(page):
+        try:
+            data = stream.get_data()
+        except Exception:
+            return False
+        if data.strip():
+            return False
+    return True
+
+
+def _scanned_facts(page: Any, page_number: int) -> PageFacts:
+    media_box = _absolute_box(getattr(page, "mediabox", None), (0.0, 0.0, 612.0, 792.0))
+    crop_box = _absolute_box(
+        getattr(page, "cropbox", None),
+        (media_box.left, media_box.top, media_box.right, media_box.bottom),
+    )
+    rotation = int(getattr(page, "rotate", 0) or 0) % 360
+    if rotation not in {0, 90, 180, 270}:
+        rotation = 0
+    width = crop_box.right - crop_box.left
+    height = crop_box.bottom - crop_box.top
+    display_width, display_height = (height, width) if rotation in {90, 270} else (width, height)
+    return PageFacts(
+        page_number,
+        media_box,
+        crop_box,
+        rotation,
+        display_width,
+        display_height,
+        (),
+        (),
+        (),
+        (VisualRegion(BBox(0.0, 0.0, 1.0, 1.0), ("native_extraction_failed",), 0),),
+        measure_text_quality(""),
+        0.0,
+        0,
+        True,
+        False,
+        False,
+    )
+
+
+def _blank_facts(page: Any, page_number: int) -> PageFacts:
+    media_box = _absolute_box(getattr(page, "mediabox", None), (0.0, 0.0, 612.0, 792.0))
+    crop_box = _absolute_box(
+        getattr(page, "cropbox", None),
+        (media_box.left, media_box.top, media_box.right, media_box.bottom),
+    )
+    rotation = int(getattr(page, "rotate", 0) or 0) % 360
+    if rotation not in {0, 90, 180, 270}:
+        rotation = 0
+    width = crop_box.right - crop_box.left
+    height = crop_box.bottom - crop_box.top
+    display_width, display_height = (height, width) if rotation in {90, 270} else (width, height)
+    return PageFacts(
+        page_number,
+        media_box,
+        crop_box,
+        rotation,
+        display_width,
+        display_height,
+        (),
+        (),
+        (),
+        (),
+        measure_text_quality(""),
+        0.0,
+        0,
+        False,
+        False,
+        False,
+    )
+
+
+def _try_fast_scanned_analysis(
+    path: Path,
+    max_pages: int,
+) -> tuple[dict[str, object], ...] | None:
+    """Lightweight scan: if no page paints text, return scanned-page facts directly.
+
+    Uses pdfminer's xref/page-tree layer only (no font loading, no character objects),
+    which is an order of magnitude cheaper than opening pdfplumber for image-only PDFs.
+    Returns None when any page may contain text, so callers keep the full analysis path.
+    """
+    try:
+        with path.open("rb") as source:
+            document = PDFDocument(PDFMinerParser(source), password="")
+            if not getattr(document, "is_extractable", True):
+                return None
+            pages = list(PDFPage.create_pages(document))
+            if len(pages) > max_pages:
+                raise LimitExceededError(f"PDF exceeds the {max_pages}-page limit")
+            if any(_page_has_text_operators(page) for page in pages):
+                return None
+            return tuple(
+                page_to_wire(
+                    _blank_facts(page, page_number)
+                    if _page_is_blank(page)
+                    else _scanned_facts(page, page_number)
+                )
+                for page_number, page in enumerate(pages, start=1)
+            )
+    except (CorruptDocumentError, LimitExceededError):
+        raise
+    except Exception:
+        # Malformed or unsupported structures fall back to the full pdfplumber path,
+        # which reports the canonical typed error.
+        return None
+
+
 def _fallback_page(page: Any, page_number: int) -> PageFacts:
     width = _page_dimension(page, "width")
     height = _page_dimension(page, "height")
@@ -472,6 +616,16 @@ def analyze_pdf_native(path: Path, max_pages: int) -> tuple[dict[str, object], .
         raise
     except OSError as error:
         raise CorruptDocumentError("PDF is not readable") from error
+
+    scanned = _try_fast_scanned_analysis(path, max_pages)
+    if scanned is not None:
+        return scanned
+
+    # pdfplumber is imported lazily: it is heavy (~100 ms) and the fast scanned path
+    # above never needs it.
+    import pdfplumber
+    from pdfplumber.utils.exceptions import MalformedPDFException, PdfminerException
+
     try:
         with pdfplumber.open(path) as pdf:
             if not getattr(pdf.doc, "is_extractable", True):
@@ -538,3 +692,13 @@ def analyze_pdf_native(path: Path, max_pages: int) -> tuple[dict[str, object], .
 async def analyze_pdf(runtime: ParserRuntime, path: Path, max_pages: int) -> PdfAnalysis:
     values = await runtime.run_native(analyze_pdf_native, path, max_pages)
     return PdfAnalysis(tuple(page_from_wire(value) for value in values))
+
+
+def __getattr__(name: str) -> Any:
+    # Lazily expose pdfplumber so importing this module stays cheap for the fast
+    # scanned path; direct access (tests, tooling) triggers the real import.
+    if name == "pdfplumber":
+        import pdfplumber
+
+        return pdfplumber
+    raise AttributeError(name)
