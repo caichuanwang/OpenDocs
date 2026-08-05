@@ -180,6 +180,95 @@ def _positioned_pdf(rows: list[tuple[int, int, str]]) -> bytes:
     return bytes(output)
 
 
+def _scanned_pdf(pages: int = 1, *, rotate: int = 0) -> bytes:
+    """生成仅含绘图操作符、无文本层的 PDF。"""
+
+    contents_objects = [3 + pages + index for index in range(pages)]
+    page_objects = [
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] "
+        + (f"/Rotate {rotate} ".encode() if rotate else b"")
+        + b"/Contents "
+        + str(contents_objects[index]).encode()
+        + b" 0 R >>"
+        for index in range(pages)
+    ]
+    objects: list[bytes] = [
+        b"<< /Type /Catalog /Pages 2 0 R >>",
+        b"<< /Type /Pages /Kids ["
+        + b" ".join(f"{3 + index} 0 R".encode() for index in range(pages))
+        + f"] /Count {pages}".encode()
+        + b" >>",
+        *page_objects,
+    ]
+    for _ in range(pages):
+        stream = b"q\nQ\n"
+        objects.append(
+            b"<< /Length " + str(len(stream)).encode() + b" >>\nstream\n" + stream + b"\nendstream"
+        )
+    return _assemble_pdf(objects)
+
+
+def _multi_page_pdf(pages: int) -> bytes:
+    """Text PDF with about 90 words per page (10 rows x 2 columns)."""
+
+    def page_stream(page_number: int) -> bytes:
+        lines = []
+        for index in range(10):
+            y = 720 - index * 60
+            lines.append(
+                f"BT /F1 12 Tf 72 {y} Td (Page {page_number} line {index + 1} of the report) Tj ET"
+            )
+            lines.append(f"BT /F1 12 Tf 300 {y} Td (value {page_number * 100 + index}) Tj ET")
+        return "\n".join(lines).encode()
+
+    font_object = 3 + pages
+    contents_objects = [4 + pages + index for index in range(pages)]
+    objects: list[bytes] = [
+        b"<< /Type /Catalog /Pages 2 0 R >>",
+        b"<< /Type /Pages /Kids ["
+        + b" ".join(f"{3 + index} 0 R".encode() for index in range(pages))
+        + f"] /Count {pages}".encode()
+        + b" >>",
+    ]
+    for index in range(pages):
+        objects.append(
+            b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] "
+            b"/Resources << /Font << /F1 "
+            + str(font_object).encode()
+            + b" 0 R >> >> /Contents "
+            + str(contents_objects[index]).encode()
+            + b" 0 R >>"
+        )
+    objects.append(b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>")
+    for page_number in range(1, pages + 1):
+        content = page_stream(page_number)
+        objects.append(
+            b"<< /Length "
+            + str(len(content)).encode()
+            + b" >>\nstream\n"
+            + content
+            + b"\nendstream"
+        )
+    return _assemble_pdf(objects)
+
+
+def _assemble_pdf(objects: list[bytes]) -> bytes:
+    output = bytearray(b"%PDF-1.4\n")
+    offsets = [0]
+    for index, body in enumerate(objects, start=1):
+        offsets.append(len(output))
+        output.extend(f"{index} 0 obj\n".encode() + body + b"\nendobj\n")
+    xref = len(output)
+    output.extend(f"xref\n0 {len(objects) + 1}\n".encode())
+    output.extend(b"0000000000 65535 f \n")
+    for offset in offsets[1:]:
+        output.extend(f"{offset:010d} 00000 n \n".encode())
+    output.extend(
+        f"trailer\n<< /Size {len(objects) + 1} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n".encode()
+    )
+    return bytes(output)
+
+
 def test_native_text_candidate_wire_preserves_font_metadata() -> None:
     candidate = NativeTextCandidate(
         "Heading",
@@ -438,6 +527,76 @@ def test_preflight_maps_corrupt_encrypted_and_page_limit(
 
     with pytest.raises(error_type):
         analyze_pdf_native(path, 1)
+
+
+def test_fast_scanned_path_skips_pdfplumber_and_routes_full_vision(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    path = tmp_path / "scanned.pdf"
+    path.write_bytes(_scanned_pdf(2))
+
+    def fail_open(_path: object) -> object:
+        raise AssertionError("pdfplumber must not be opened for scanned PDFs")
+
+    monkeypatch.setattr("opendocs.parsers.pdf.analyze.pdfplumber.open", fail_open)
+
+    pages = analyze_pdf_native(path, 10)
+
+    facts = tuple(page_from_wire(wire) for wire in pages)
+    assert len(facts) == 2
+    assert all(page.words == () for page in facts)
+    assert all(page.native_extraction_failed for page in facts)
+    assert all(route_page(page).route is PageRoute.FULL_VISION for page in facts)
+
+
+def test_fast_scanned_path_preserves_rotated_geometry(tmp_path: Path) -> None:
+    path = tmp_path / "rotated.pdf"
+    path.write_bytes(_scanned_pdf(1, rotate=90))
+
+    facts = page_from_wire(analyze_pdf_native(path, 10)[0])
+
+    assert facts.rotation == 90
+    assert facts.display_width == 792.0
+    assert facts.display_height == 612.0
+    assert facts.crop_box == BBox(0.0, 0.0, 612.0, 792.0)
+
+
+def test_fast_scanned_path_respects_page_limit(tmp_path: Path) -> None:
+    path = tmp_path / "three.pdf"
+    path.write_bytes(_scanned_pdf(3))
+
+    with pytest.raises(LimitExceededError):
+        analyze_pdf_native(path, 2)
+
+
+def test_text_pdf_skips_fast_scanned_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    path = tmp_path / "text.pdf"
+    path.write_bytes(_minimal_pdf("hello"))
+    opened: list[object] = []
+    original = analyze_module.pdfplumber.open
+
+    def tracked(_path: object) -> object:
+        opened.append(_path)
+        return original(_path)
+
+    monkeypatch.setattr("opendocs.parsers.pdf.analyze.pdfplumber.open", tracked)
+
+    facts = tuple(page_from_wire(wire) for wire in analyze_pdf_native(path, 10))
+
+    assert opened
+    assert len(facts) == 1
+    assert len(facts[0].words) == 1
+
+
+def test_wire_budget_accepts_medium_document(tmp_path: Path) -> None:
+    path = tmp_path / "medium.pdf"
+    path.write_bytes(_multi_page_pdf(22))
+
+    pages = analyze_pdf_native(path, 50)
+
+    assert len(pages) == 22
+    assert all(page_from_wire(wire).words for wire in pages)
 
 
 @pytest.mark.asyncio
