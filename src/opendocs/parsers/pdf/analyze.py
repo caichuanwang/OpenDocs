@@ -255,9 +255,11 @@ def _tables(
     page: Any,
     words: Sequence[PdfWord],
     transform: CoordinateTransform,
+    *,
+    settings: dict[str, str] | None = None,
 ) -> tuple[list[Any], bool]:
     try:
-        raw_tables = page.find_tables()
+        raw_tables = page.find_tables(settings) if settings is not None else page.find_tables()
     except (
         AttributeError,
         KeyError,
@@ -355,6 +357,18 @@ def _analyze_page(page: Any, page_number: int) -> PageFacts:
     all_tables, table_failed = _tables(page, words, geometry)
     _enforce_wire_budget(words, all_tables)
     accepted_tables = select_canonical_tables(all_tables)
+    if not accepted_tables:
+        strict_tables, strict_failed = _tables(
+            page,
+            words,
+            geometry,
+            settings={"vertical_strategy": "lines_strict", "horizontal_strategy": "lines_strict"},
+        )
+        if strict_tables:
+            _enforce_wire_budget(words, strict_tables)
+            accepted_tables = select_canonical_tables(strict_tables)
+            all_tables = strict_tables
+            table_failed = table_failed or strict_failed
     if not accepted_tables:
         heuristic_table = detect_heuristic_table(words)
         if heuristic_table is not None:

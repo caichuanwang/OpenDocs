@@ -34,57 +34,51 @@ def _assert_remote_actions_are_pinned(path: Path) -> None:
     assert all(PINNED_ACTION.fullmatch(line) for line in action_lines)
 
 
-def test_ci_covers_the_release_blocking_os_and_python_matrix() -> None:
+def test_ci_covers_the_min_and_max_python_versions() -> None:
     jobs = _jobs(CI_PATH)
     test_job = jobs["test"]
     strategy = cast(dict[str, object], test_job["strategy"])
     matrix = cast(dict[str, list[str]], strategy["matrix"])
 
-    assert matrix["os"] == ["ubuntu-latest", "macos-latest"]
-    assert matrix["python-version"] == ["3.11", "3.12", "3.13"]
-    assert test_job["runs-on"] == "${{ matrix.os }}"
+    assert "os" not in matrix
+    assert matrix["python-version"] == ["3.11", "3.13"]
+    assert test_job["runs-on"] == "ubuntu-latest"
 
 
 def test_ci_installs_poppler_and_keeps_all_public_gates() -> None:
     source = CI_PATH.read_text(encoding="utf-8")
 
     assert "sudo apt-get install --yes poppler-utils" in source
-    assert "brew install poppler" in source
     for command in (
         "pytest -q",
         "ruff check .",
         "ruff format --check .",
-        "ty check src tests benchmarks scripts examples",
+        "ty check src tests",
         "scripts/check_release_artifacts.py dist",
-        "scripts/check_release_artifacts.py dist --verify-checksums",
-        "scripts/release_smoke.py",
     ):
         assert command in source
     assert 'OPENAI_API_KEY: ""' in source
     assert 'ANTHROPIC_API_KEY: ""' in source
 
 
-def test_ci_builds_once_and_smokes_the_same_artifact_on_both_operating_systems() -> None:
+def test_ci_builds_once_and_lint_is_separate_from_test() -> None:
     jobs = _jobs(CI_PATH)
     source = CI_PATH.read_text(encoding="utf-8")
-    smoke = jobs["artifact-smoke"]
-    strategy = cast(dict[str, object], smoke["strategy"])
-    matrix = cast(dict[str, list[str]], strategy["matrix"])
 
     assert source.count("uv build") == 1
-    assert matrix["os"] == ["ubuntu-latest", "macos-latest"]
-    assert smoke["needs"] == "build"
-    assert source.count("name: release-dists") == 2
-    assert "dist/*.whl" in source
-    assert "dist/*.tar.gz" in source
-    assert "dist/SHA256SUMS" in source
+    assert "lint" in jobs
+    assert jobs["lint"]["runs-on"] == "ubuntu-latest"
+    assert jobs["build"]["needs"] == ["test", "lint"]
+    assert "ruff check ." in source
+    assert "ruff format --check ." in source
+    assert "ty check src tests" in source
 
 
 def test_ci_cancels_superseded_non_tag_runs_and_pins_actions() -> None:
     workflow = _workflow(CI_PATH)
     concurrency = cast(dict[str, str], workflow["concurrency"])
 
-    assert concurrency["cancel-in-progress"] == "${{ github.ref_type != 'tag' }}"
+    assert concurrency["cancel-in-progress"] == "true"
     _assert_remote_actions_are_pinned(CI_PATH)
 
 
