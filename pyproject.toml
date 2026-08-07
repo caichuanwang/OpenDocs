@@ -5,39 +5,58 @@ build-backend = "hatchling.build"
 [project]
 name = "opendocs-sdk"
 version = "0.1.0"
-description = "Convert local documents to Markdown"
+description = "Convert local documents (PDF, DOCX, PPTX, images, TXT, Markdown) to clean Markdown with optional LLM vision"
 readme = "README.md"
 requires-python = ">=3.11"
 license = "MIT"
 license-files = ["LICENSE"]
 authors = [{ name = "OpenDocs contributors" }]
+keywords = [
+  "document",
+  "parsing",
+  "markdown",
+  "pdf",
+  "docx",
+  "pptx",
+  "ocr",
+  "llm",
+  "vision",
+  "document-parser",
+  "document-conversion",
+  "text-extraction",
+  "pdf-to-markdown",
+  "litellm",
+]
 classifiers = [
   "Development Status :: 3 - Alpha",
+  "Intended Audience :: Developers",
   "License :: OSI Approved :: MIT License",
+  "Operating System :: MacOS",
+  "Operating System :: POSIX :: Linux",
   "Programming Language :: Python :: 3",
   "Programming Language :: Python :: 3.11",
   "Programming Language :: Python :: 3.12",
   "Programming Language :: Python :: 3.13",
+  "Topic :: Software Development :: Libraries :: Python Modules",
+  "Topic :: Text Processing :: Markup",
+  "Topic :: Text Processing :: Markup :: Markdown",
+  "Topic :: Scientific/Engineering :: Artificial Intelligence",
 ]
 dependencies = [
-    "litellm>=1.93,<2",
-    "pdfplumber>=0.11.10,<0.12",
-    "pillow>=12.3,<13",
-    "python-docx>=1.1.2,<2",
-    "python-pptx>=1.0.2,<2",
+  "litellm>=1.93,<2",
+  "pdfplumber>=0.11.10,<0.12",
+  "pillow>=12.3,<13",
+  "python-docx>=1.1.2,<2",
+  "python-pptx>=1.0.2,<2",
 ]
 
 [project.urls]
+Homepage = "https://github.com/caichuanwang/OpenDocs"
 Repository = "https://github.com/caichuanwang/OpenDocs"
 Issues = "https://github.com/caichuanwang/OpenDocs/issues"
 
 [dependency-groups]
-dev = [
-  "pytest>=9.1",
-  "pytest-asyncio>=1.4",
-  "ruff>=0.16",
-  "ty>=0.0.63",
-]
+dev = ["pytest>=9.1", "pytest-asyncio>=1.4", "ruff>=0.16", "ty>=0.0.63"]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/opendocs"]
