@@ -232,3 +232,6 @@ benchmarks/document_parsing/manifest.local.json
 .codex
 .serena
 .omx
+
+# macOS
+.DS_Store

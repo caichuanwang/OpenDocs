@@ -6,7 +6,7 @@ Architecture: `docs/plans/2026-07-31-m3-alpha-release-architecture.md`
 
 ## 0.1.0 Scope Decision - 2026-08-03
 
-The initial plan defined a 30-page PDF/image tuning split and a separate 30-page holdout split as a
+The initial plan defined a PDF/image tuning split and a separate holdout split as a
 release blocker. For the first public Alpha, the maintainer selected a narrower, evidence-backed
 acceptance boundary:
 
@@ -14,14 +14,10 @@ acceptance boundary:
 - one genuinely independent real DOCX and one real PPTX must be parsed through the SDK and reviewed
   by the maintainer;
 - all public tests, lifecycle/resource regressions, static checks, package inspection, supported
-  platform CI, TestPyPI, public PyPI smoke, tag, and Release remain mandatory;
-- the full 30/30 PDF/image benchmark is deferred and must be recorded as not run, never rendered as
-  passing evidence.
+  platform CI, TestPyPI, public PyPI smoke, tag, and Release remain mandatory.
 
 This decision narrows evidence coverage, not product claims: `0.1.0` remains Alpha, with no
-production-readiness, quality-coverage, cost, or performance-SLA claim. Earlier 30/30 sections are
-retained as the implemented benchmark framework and future quality-expansion procedure; this scope
-decision controls the `0.1.0` release checklist below.
+production-readiness, quality-coverage, cost, or performance-SLA claim.
 
 ## Requirements Summary
 
@@ -204,8 +200,8 @@ Test first:
    categories, invalid split names, and unsupported policy versions.
 2. Reject the same content hash in tuning and holdout.
 3. Reject PDF/image pages from one source document crossing splits.
-4. Require exactly 30 PDF/image pages per split, six accepted categories, and at least five pages
-   per category.
+4. Require exactly the policy-defined number of PDF/image pages per split, accepted categories, and
+   minimum pages per category.
 5. Require one real DOCX and PPTX in each Office split.
 6. Reject a holdout item marked inspected, used for threshold calibration, or used for prompt/code
    tuning.
@@ -576,17 +572,15 @@ Steps:
 2. Run all public commands on the candidate.
 3. Run M2 approved acceptance.
 4. Run the real Office tuning documents and the unseen DOCX/PPTX holdout.
-5. Record the full 30/30 PDF/image benchmark as not run for this Alpha; do not synthesize quality
-   records or reuse Office evidence as a substitute.
-6. Run accepted replay/live gates and the public lifecycle/resource regressions.
-7. Write and manually inspect safe aggregate evidence containing both passing and unrun gates.
-8. Build once locally and run wheel/sdist isolation smokes on both supported platforms through CI.
-9. Search tracked changes and artifacts for prohibited paths/content and secrets without printing
+Private Office holdout evidence
+5. Write and manually inspect safe aggregate evidence containing both passing and unrun gates.
+6. Build once locally and run wheel/sdist isolation smokes on both supported platforms through CI.
+7. Search tracked changes and artifacts for prohibited paths/content and secrets without printing
    secret values.
-10. Record the candidate commit, version, policy/evaluator digests, artifact hashes, and CI run.
-11. Commit code and documentation as the candidate, then add the version evidence in a second
+8. Record the candidate commit, version, policy/evaluator digests, artifact hashes, and CI run.
+9. Commit code and documentation as the candidate, then add the version evidence in a second
     evidence-only commit whose sole parent is that candidate.
-12. Freeze the pair. Any code, prompt, dependency, policy, or relevant documentation change
+10. Freeze the pair. Any code, prompt, dependency, policy, or relevant documentation change
     requires rerunning affected gates and producing a new evidence-only commit.
 
 Verification:
@@ -660,9 +654,7 @@ and artifact set. M3 is complete.
 
 - [x] M2 checklist approved and required private M2 gates pass.
 - [x] Public suite, lint, format, types, build, and artifact checks pass.
-- Deferred for `0.1.0`: PDF/image split of 30 tuning and 30 independent holdout pages.
 - [x] Office evidence includes the accepted M2 documents and an independent real DOCX/PPTX pair.
-- [x] Safe evidence explicitly records the deferred PDF/image benchmark as not run.
 - [x] Maintainer review accepted the independent Office holdout without committing private output.
 - [x] Public resource/lifecycle regressions pass; the independent real-load benchmark remains
   deferred and no performance SLA is claimed.

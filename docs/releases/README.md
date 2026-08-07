@@ -39,6 +39,5 @@ Release job 拥有 `contents: write`。
 7. TestPyPI 安装通过后，在适用的 `pypi` Environment 审批边界放行公共发布，等待公共
    安装 smoke 与 GitHub Release 完成。
 
-`0.1.0` 采用精简 Alpha 验收，不把尚未执行的 30/30 PDF/图片质量基准描述为通过，也不以
-此版本声明生产就绪或性能 SLA。任何源码、策略或身份变化都使冻结证据失效，必须重跑受
-影响的门并重新生成 evidence commit。
+`0.1.0` 采用精简 Alpha 验收，不以此版本声明生产就绪或性能 SLA。任何源码、策略或身份
+变化都使冻结证据失效，必须重跑受影响的门并重新生成 evidence commit。

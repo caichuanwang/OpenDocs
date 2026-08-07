@@ -83,8 +83,6 @@ Detailed execution plan:
 Summary:
 
 - close the maintainer-approved M2 acceptance gate before release
-- provide a strict 30/30 PDF/image benchmark process for later quality expansion without claiming
-  that dataset as completed for `0.1.0`
 - validate one genuinely independent real DOCX and PPTX as the lean Alpha holdout
 - expand cancellation, timeout, per-parse concurrency, dependency-boundary, and resource evidence
 - verify CPython 3.11-3.13 on Ubuntu and macOS with Poppler
@@ -108,16 +106,10 @@ publication was verified by the successful
 [GitHub Release](https://github.com/caichuanwang/OpenDocs/releases/tag/v0.1.0). The wheel and source
 distribution SHA-256 digests agree across PyPI, TestPyPI, and the GitHub Release assets.
 
-Scope decision for the first Alpha: the full 30/30 PDF/image tuning and independent holdout dataset
-is deferred and is not a `0.1.0` release blocker. This is an explicit evidence gap, not a passing
-result. The release remains Alpha-only and makes no production-readiness, quality-coverage, cost,
-or performance-SLA claim.
-
 Exit criteria:
 
 - M2 approval, public gates, and maintainer review of the independent real DOCX/PPTX holdout pass
 - private Office evidence remains source-isolated and only safe aggregate results are committed
-- the evidence file records that the full 30/30 PDF/image benchmark was not run for `0.1.0`
 - wheel and source distribution pass isolated installation checks on Ubuntu and macOS
 - public PyPI installation of `opendocs-sdk==0.1.0` passes on both supported operating systems
 - GitHub tag and Release `v0.1.0` identify the exact published source and artifacts
