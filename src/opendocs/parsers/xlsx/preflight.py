@@ -82,6 +82,12 @@ _HYPERLINK_RELATIONSHIP = f"{_OFFICE_REL_NS}/hyperlink"
 _PIVOT_TABLE_RELATIONSHIP = f"{_OFFICE_REL_NS}/pivotTable"
 _PIVOT_CACHE_DEFINITION_RELATIONSHIP = f"{_OFFICE_REL_NS}/pivotCacheDefinition"
 _PIVOT_CACHE_RECORDS_RELATIONSHIP = f"{_OFFICE_REL_NS}/pivotCacheRecords"
+_EXTERNAL_LINK_RELATIONSHIP = f"{_OFFICE_REL_NS}/externalLink"
+_EXTERNAL_LINK_PATH_RELATIONSHIP = f"{_OFFICE_REL_NS}/externalLinkPath"
+_CONNECTIONS_RELATIONSHIP = f"{_OFFICE_REL_NS}/connections"
+_THREADED_REL_NS = "http://schemas.microsoft.com/office/2017/10/relationships"
+_THREADED_COMMENTS_RELATIONSHIP = f"{_THREADED_REL_NS}/threadedComment"
+_PERSON_RELATIONSHIP = f"{_THREADED_REL_NS}/person"
 _RELATIONSHIP_ID = f"{{{_OFFICE_REL_NS}}}id"
 _RELATIONSHIP_TAG = f"{{{_PACKAGE_REL_NS}}}Relationship"
 _A1_RANGE_RE = re.compile(r"^([A-Z]{1,3})([1-9][0-9]{0,6})(?::([A-Z]{1,3})([1-9][0-9]{0,6}))?$")
@@ -91,6 +97,7 @@ _DRAWING_NS = "http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawi
 _DRAWING_MAIN_NS = "http://schemas.openxmlformats.org/drawingml/2006/main"
 _CHART_NS = "http://schemas.openxmlformats.org/drawingml/2006/chart"
 _CUSTOM_PROPERTIES_NS = "http://schemas.openxmlformats.org/officeDocument/2006/custom-properties"
+_THREADED_COMMENTS_NS = "http://schemas.microsoft.com/office/spreadsheetml/2018/threadedcomments"
 
 
 @dataclass(frozen=True, slots=True)
@@ -460,6 +467,140 @@ def _read_relationships(
     return relationships
 
 
+def _preflight_persons(
+    archive: ZipFile,
+    part_name: str,
+    usage: _ResourceUsage,
+) -> None:
+    root_seen = False
+    try:
+        with archive.open(part_name) as stream:
+            for event, element in _xml_events(stream, message="XLSX persons part is corrupt"):
+                if not root_seen and event == "start":
+                    root_seen = True
+                    if element.tag != f"{{{_THREADED_COMMENTS_NS}}}personList":
+                        raise CorruptDocumentError("XLSX persons namespace is invalid")
+                if event == "end" and element.tag == f"{{{_THREADED_COMMENTS_NS}}}person":
+                    if not element.get("id") or not element.get("displayName"):
+                        raise CorruptDocumentError("XLSX person entry is invalid")
+                    _increment(
+                        usage,
+                        "comment_authors",
+                        1,
+                        limit=MAX_COMMENT_AUTHORS,
+                        message="XLSX exceeds the comment author limit",
+                    )
+                    _add_native_text(
+                        usage,
+                        sum(
+                            len(element.get(attribute, ""))
+                            for attribute in ("displayName", "userId", "providerId")
+                        ),
+                    )
+                    element.clear()
+    except (KeyError, OSError) as error:
+        raise CorruptDocumentError("XLSX persons part is corrupt") from error
+    if not root_seen:
+        raise CorruptDocumentError("XLSX persons part is corrupt")
+
+
+def _preflight_connections(
+    archive: ZipFile,
+    part_name: str,
+    usage: _ResourceUsage,
+) -> None:
+    root_seen = False
+    try:
+        with archive.open(part_name) as stream:
+            for event, element in _xml_events(stream, message="XLSX connections part is corrupt"):
+                if not root_seen and event == "start":
+                    root_seen = True
+                    if element.tag != f"{{{_SPREADSHEET_NS}}}connections":
+                        raise CorruptDocumentError("XLSX connections namespace is invalid")
+                if event != "end" or element.tag != f"{{{_SPREADSHEET_NS}}}connection":
+                    continue
+                references = tuple(
+                    element.get(attribute, "")
+                    for attribute in ("sourceFile", "odcFile", "connectionFile")
+                    if element.get(attribute)
+                )
+                for reference in references:
+                    _increment(
+                        usage,
+                        "external_references",
+                        1,
+                        limit=MAX_EXTERNAL_REFERENCES,
+                        message="XLSX exceeds the external reference limit",
+                    )
+                    _add_native_text(usage, len(reference))
+                element.clear()
+    except (KeyError, OSError) as error:
+        raise CorruptDocumentError("XLSX connections part is corrupt") from error
+    if not root_seen:
+        raise CorruptDocumentError("XLSX connections part is corrupt")
+
+
+def _preflight_workbook_text_relationships(
+    archive: ZipFile,
+    infos: dict[str, ZipInfo],
+    relationships: dict[str, _Relationship],
+    usage: _ResourceUsage,
+    referenced_external_ids: set[str],
+) -> None:
+    person_targets = tuple(
+        relationship.target
+        for relationship in relationships.values()
+        if relationship.relationship_type == _PERSON_RELATIONSHIP and not relationship.external
+    )
+    if (
+        any(
+            relationship.external
+            for relationship in relationships.values()
+            if relationship.relationship_type == _PERSON_RELATIONSHIP
+        )
+        or len(person_targets) > 1
+    ):
+        raise CorruptDocumentError("XLSX persons relationship is invalid")
+    for target in person_targets:
+        _preflight_persons(archive, target, usage)
+
+    for relationship_id, relationship in relationships.items():
+        if relationship.relationship_type == _CONNECTIONS_RELATIONSHIP:
+            if relationship.external:
+                raise CorruptDocumentError("XLSX connections relationship is invalid")
+            _preflight_connections(archive, relationship.target, usage)
+        elif relationship.relationship_type == _EXTERNAL_LINK_RELATIONSHIP:
+            if relationship.external:
+                if relationship_id not in referenced_external_ids:
+                    _increment(
+                        usage,
+                        "external_references",
+                        1,
+                        limit=MAX_EXTERNAL_REFERENCES,
+                        message="XLSX exceeds the external reference limit",
+                    )
+                _add_native_text(usage, len(relationship.target))
+                continue
+            nested = _read_relationships(
+                archive,
+                infos,
+                relationship.target,
+                required=_relationships_part(relationship.target) in infos,
+            )
+            for nested_relationship in nested.values():
+                if nested_relationship.relationship_type != _EXTERNAL_LINK_PATH_RELATIONSHIP:
+                    continue
+                if relationship_id not in referenced_external_ids:
+                    _increment(
+                        usage,
+                        "external_references",
+                        1,
+                        limit=MAX_EXTERNAL_REFERENCES,
+                        message="XLSX exceeds the external reference limit",
+                    )
+                _add_native_text(usage, len(nested_relationship.target))
+
+
 def _parse_workbook(
     archive: ZipFile,
     infos: dict[str, ZipInfo],
@@ -481,6 +622,7 @@ def _parse_workbook(
     sheet_ids: set[int] = set()
     names: set[str] = set()
     pivot_cache_targets: list[str] = []
+    referenced_external_ids: set[str] = set()
     date_1904 = False
     root_seen = False
     try:
@@ -524,8 +666,15 @@ def _parse_workbook(
                         limit=MAX_EXTERNAL_REFERENCES,
                         message="XLSX exceeds the external reference limit",
                     )
-                    if element.get(_RELATIONSHIP_ID) not in relationships:
+                    relationship_id = element.get(_RELATIONSHIP_ID)
+                    relationship = relationships.get(relationship_id or "")
+                    if (
+                        relationship_id is None
+                        or relationship is None
+                        or relationship.relationship_type != _EXTERNAL_LINK_RELATIONSHIP
+                    ):
                         raise CorruptDocumentError("XLSX external reference is invalid")
+                    referenced_external_ids.add(relationship_id)
                     element.clear()
                 elif element.tag == f"{{{_SPREADSHEET_NS}}}pivotCache":
                     _increment(
@@ -612,6 +761,13 @@ def _parse_workbook(
     )
     if len(shared_string_targets) > 1 or len(style_targets) > 1:
         raise CorruptDocumentError("XLSX workbook singleton relationships are duplicated")
+    _preflight_workbook_text_relationships(
+        archive,
+        infos,
+        relationships,
+        usage,
+        referenced_external_ids,
+    )
     shared_strings_part = (
         shared_string_targets[0]
         if shared_string_targets
@@ -849,6 +1005,53 @@ def _preflight_comments(
         raise CorruptDocumentError("XLSX comments part is corrupt")
 
 
+def _preflight_threaded_comments(
+    archive: ZipFile,
+    part_name: str,
+    usage: _ResourceUsage,
+) -> None:
+    root_seen = False
+    try:
+        with archive.open(part_name) as stream:
+            for event, element in _xml_events(
+                stream,
+                message="XLSX threaded comments part is corrupt",
+            ):
+                if not root_seen and event == "start":
+                    root_seen = True
+                    if element.tag != f"{{{_THREADED_COMMENTS_NS}}}ThreadedComments":
+                        raise CorruptDocumentError("XLSX threaded comments namespace is invalid")
+                if event == "end" and element.tag == f"{{{_THREADED_COMMENTS_NS}}}threadedComment":
+                    reference = element.get("ref")
+                    if reference is None or not element.get("personId"):
+                        raise CorruptDocumentError("XLSX threaded comment is invalid")
+                    bounds = _parse_a1_range(
+                        reference,
+                        message="XLSX threaded comment anchor is invalid",
+                    )
+                    if _area(bounds) != 1:
+                        raise CorruptDocumentError("XLSX threaded comment anchor is invalid")
+                    _increment(
+                        usage,
+                        "hyperlinks_and_comments",
+                        1,
+                        limit=MAX_HYPERLINKS_AND_COMMENTS,
+                        message="XLSX exceeds the hyperlink and comment limit",
+                    )
+                    _add_native_text(
+                        usage,
+                        sum(
+                            len(node.text or "")
+                            for node in element.iter(f"{{{_THREADED_COMMENTS_NS}}}text")
+                        ),
+                    )
+                    element.clear()
+    except (KeyError, OSError) as error:
+        raise CorruptDocumentError("XLSX threaded comments part is corrupt") from error
+    if not root_seen:
+        raise CorruptDocumentError("XLSX threaded comments part is corrupt")
+
+
 def _preflight_chart(
     archive: ZipFile,
     part_name: str,
@@ -1008,6 +1211,14 @@ def _preflight_drawing(
                 _add_native_text(
                     usage,
                     sum(len(node.text or "") for node in element.iter(f"{{{_DRAWING_MAIN_NS}}}t")),
+                )
+                _add_native_text(
+                    usage,
+                    sum(
+                        len(node.get(attribute, ""))
+                        for node in element.iter(f"{{{_DRAWING_NS}}}cNvPr")
+                        for attribute in ("name", "descr", "title")
+                    ),
                 )
                 for node in element.iter():
                     for attribute_name, relationship_id in node.attrib.items():
@@ -1469,6 +1680,10 @@ def _worksheet_counts(
             if relationship.external:
                 raise CorruptDocumentError("XLSX comments relationship is invalid")
             _preflight_comments(archive, relationship.target, usage)
+        elif relationship.relationship_type == _THREADED_COMMENTS_RELATIONSHIP:
+            if relationship.external:
+                raise CorruptDocumentError("XLSX threaded comments relationship is invalid")
+            _preflight_threaded_comments(archive, relationship.target, usage)
         elif relationship.relationship_type == _PIVOT_TABLE_RELATIONSHIP:
             if relationship.external:
                 raise CorruptDocumentError("XLSX pivot table relationship is invalid")
@@ -1511,6 +1726,7 @@ def _worksheet_counts(
     known_relationship_types = {
         _DRAWING_RELATIONSHIP,
         _COMMENTS_RELATIONSHIP,
+        _THREADED_COMMENTS_RELATIONSHIP,
         _TABLE_RELATIONSHIP,
         _HYPERLINK_RELATIONSHIP,
         _PIVOT_TABLE_RELATIONSHIP,

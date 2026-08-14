@@ -35,6 +35,11 @@ from opendocs.parsers.xlsx.preflight import (
     MAX_MATERIALIZED_GRID_CELLS as PREFLIGHT_MAX_MATERIALIZED_GRID_CELLS,
 )
 from opendocs.parsers.xlsx.preflight import XlsxPreflight, XlsxPreflightSheet
+from opendocs.parsers.xlsx.text_objects import (
+    XlsxTextObject,
+    read_xlsx_text_objects,
+    text_object_blocks,
+)
 from opendocs.parsers.xlsx.values import format_saved_value
 
 MAX_MATERIALIZED_GRID_CELLS = PREFLIGHT_MAX_MATERIALIZED_GRID_CELLS
@@ -138,6 +143,17 @@ class _RegionSpec:
     header_rows: int
     merges: tuple[_MergeSpec, ...]
     kind: str
+
+
+@dataclass(frozen=True, slots=True)
+class _SlotCandidate:
+    row: int
+    column: int
+    kind_rank: int
+    source_ordinal: int
+    anchor: str
+    region: _RegionSpec | None = None
+    text_object: XlsxTextObject | None = None
 
 
 @dataclass(slots=True)
@@ -629,6 +645,7 @@ def _sheet_slots(
     sheet: XlsxPreflightSheet,
     warnings: _WarningCollector,
     budget: _MaterializationBudget,
+    text_objects: tuple[XlsxTextObject, ...],
 ) -> tuple[XlsxNativeSlot, ...]:
     texts, semantic = _cell_texts(
         worksheet,
@@ -637,20 +654,91 @@ def _sheet_slots(
         sheet=sheet,
         warnings=warnings,
     )
-    slots: list[XlsxNativeSlot] = [_sheet_prelude(sheet)]
-    for source_index, spec in enumerate(_region_specs(worksheet, semantic), start=1):
+    candidates: list[_SlotCandidate] = []
+    for ordinal, spec in enumerate(_region_specs(worksheet, semantic), start=1):
         budget.consume(_area(spec.bounds))
         anchor = _anchor(spec.bounds)
-        comment = (
-            f"<!-- xlsx-{spec.kind}: sheet={sheet.sheet_index} "
-            f"range={anchor} object={source_index} -->"
+        candidates.append(
+            _SlotCandidate(
+                row=spec.bounds[1],
+                column=spec.bounds[0],
+                kind_rank=0,
+                source_ordinal=ordinal,
+                anchor=anchor,
+                region=spec,
+            )
         )
-        block: Block = _region_block(spec, texts)
+    candidates.extend(
+        _SlotCandidate(
+            row=item.row,
+            column=item.column,
+            kind_rank=item.kind_rank,
+            source_ordinal=item.source_ordinal,
+            anchor=item.anchor,
+            text_object=item,
+        )
+        for item in text_objects
+    )
+    slots: list[XlsxNativeSlot] = [_sheet_prelude(sheet)]
+    for source_index, candidate in enumerate(
+        sorted(
+            candidates,
+            key=lambda item: (item.row, item.column, item.kind_rank, item.source_ordinal),
+        ),
+        start=1,
+    ):
+        if candidate.region is not None:
+            spec = candidate.region
+            comment = (
+                f"<!-- xlsx-{spec.kind}: sheet={sheet.sheet_index} "
+                f"range={candidate.anchor} object={source_index} -->"
+            )
+            block: Block = _region_block(spec, texts)
+            blocks = (MarkdownBlock(comment), block)
+        elif candidate.text_object is not None:
+            blocks = text_object_blocks(
+                candidate.text_object,
+                fallback_label=texts.get((candidate.row, candidate.column), ""),
+                object_index=source_index,
+            )
+        else:
+            raise AssertionError("XLSX slot candidate is invalid")
         slots.append(
             XlsxNativeSlot(
                 source_index=source_index,
-                anchor=anchor,
-                blocks=(MarkdownBlock(comment), block),
+                anchor=candidate.anchor,
+                blocks=blocks,
+            )
+        )
+    return tuple(slots)
+
+
+def _non_worksheet_slots(
+    sheet: XlsxPreflightSheet,
+    text_objects: tuple[XlsxTextObject, ...],
+) -> tuple[XlsxNativeSlot, ...]:
+    slots = [_sheet_prelude(sheet)]
+    for source_index, item in enumerate(
+        sorted(
+            text_objects,
+            key=lambda value: (
+                value.row,
+                value.column,
+                value.kind_rank,
+                value.source_ordinal,
+            ),
+        ),
+        start=1,
+    ):
+        slots.append(
+            XlsxNativeSlot(
+                source_index=source_index,
+                anchor=item.anchor,
+                blocks=text_object_blocks(
+                    item,
+                    fallback_label="",
+                    object_index=source_index,
+                ),
             )
         )
     return tuple(slots)
@@ -662,7 +750,19 @@ def extract_xlsx(path: Path, preflight: XlsxPreflight) -> XlsxDocument:
     if not isinstance(preflight, XlsxPreflight):
         raise TypeError("preflight must be an XlsxPreflight")
     sidecars = _read_sidecars(path, preflight)
+    text_objects = read_xlsx_text_objects(path, preflight)
     warnings = _WarningCollector()
+    for warning in text_objects.warnings:
+        sheet = preflight.sheets[warning.sheet_index - 1]
+        warnings.add(
+            warning.code,
+            sheet=sheet,
+            coordinate=warning.anchor.split(":", 1)[0],
+            detail=(
+                f"sheet={warning.sheet_index} anchor={warning.anchor} "
+                f"object={warning.object_ordinal}: {warning.detail}"
+            ),
+        )
     workbook = openpyxl.load_workbook(
         path,
         read_only=False,
@@ -675,8 +775,9 @@ def extract_xlsx(path: Path, preflight: XlsxPreflight) -> XlsxDocument:
         sheets: list[XlsxSheet] = []
         budget = _MaterializationBudget()
         for sheet in preflight.sheets:
+            sheet_text_objects = text_objects.by_sheet[sheet.sheet_index - 1]
             if sheet.kind is XlsxSheetKind.CHARTSHEET:
-                slots = (_sheet_prelude(sheet),)
+                slots = _non_worksheet_slots(sheet, sheet_text_objects)
             else:
                 worksheet = worksheets.get(sheet.name)
                 if worksheet is None:
@@ -688,6 +789,7 @@ def extract_xlsx(path: Path, preflight: XlsxPreflight) -> XlsxDocument:
                     sheet=sheet,
                     warnings=warnings,
                     budget=budget,
+                    text_objects=sheet_text_objects,
                 )
             sheets.append(
                 XlsxSheet(

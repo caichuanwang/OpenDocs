@@ -701,6 +701,98 @@ def test_unknown_relationship_objects_are_deterministically_locatable(tmp_path: 
     ] == [(0, "oleObject", "rIdOle", "xl/embeddings/ole1.bin")]
 
 
+def test_threaded_comments_and_person_text_are_preflighted_before_extraction(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    path = tmp_path / "threaded-comments.xlsx"
+    _one_sheet(path)
+    threaded_relationship = (
+        "http://schemas.microsoft.com/office/2017/10/relationships/threadedComment"
+    )
+    person_relationship = "http://schemas.microsoft.com/office/2017/10/relationships/person"
+    threaded_namespace = "http://schemas.microsoft.com/office/spreadsheetml/2018/threadedcomments"
+    with ZipFile(path) as archive:
+        workbook_relationships = archive.read("xl/_rels/workbook.xml.rels")
+    workbook_relationships = workbook_relationships.replace(
+        b"</Relationships>",
+        (
+            f'<Relationship Id="rIdPerson" Type="{person_relationship}" '
+            'Target="persons/person.xml"/></Relationships>'
+        ).encode(),
+    )
+    rewrite_xlsx(
+        path,
+        {
+            "xl/worksheets/_rels/sheet1.xml.rels": _relationships(
+                (
+                    "rIdThreaded",
+                    threaded_relationship,
+                    "../threadedComments/threadedComment1.xml",
+                ),
+            ),
+            "xl/threadedComments/threadedComment1.xml": (
+                f'<ThreadedComments xmlns="{threaded_namespace}">'
+                '<threadedComment ref="A1" personId="person-1"><text>hello</text>'
+                "</threadedComment></ThreadedComments>"
+            ).encode(),
+            "xl/persons/person.xml": (
+                f'<personList xmlns="{threaded_namespace}"><person id="person-1" '
+                'displayName="Reviewer"/></personList>'
+            ).encode(),
+            "xl/_rels/workbook.xml.rels": workbook_relationships,
+        },
+    )
+
+    result = preflight_xlsx(path)
+
+    assert result.usage.hyperlinks_and_comments == 1
+    assert result.native_text_chars >= len("helloReviewer")
+    assert result.sheets[0].unsupported_objects == ()
+
+    monkeypatch.setattr(preflight_module, "MAX_HYPERLINKS_AND_COMMENTS", 0)
+    with pytest.raises(LimitExceededError, match="hyperlink and comment"):
+        preflight_xlsx(path)
+
+
+def test_drawing_shape_metadata_is_included_in_native_text_budget(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    path = tmp_path / "drawing-text-budget.xlsx"
+    _one_sheet(path)
+    drawing_ns = "http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing"
+    drawing_main_ns = "http://schemas.openxmlformats.org/drawingml/2006/main"
+    rewrite_xlsx(
+        path,
+        {
+            "xl/worksheets/sheet1.xml": _worksheet(
+                '<dimension ref="A1"/><sheetData/><drawing r:id="rIdDrawing"/>'
+            ),
+            "xl/worksheets/_rels/sheet1.xml.rels": _relationships(
+                ("rIdDrawing", f"{OFFICE_REL_NS}/drawing", "../drawings/drawing1.xml"),
+            ),
+            "xl/drawings/drawing1.xml": (
+                f'<xdr:wsDr xmlns:xdr="{drawing_ns}" xmlns:a="{drawing_main_ns}">'
+                "<xdr:oneCellAnchor><xdr:from><xdr:col>0</xdr:col><xdr:row>0</xdr:row>"
+                '</xdr:from><xdr:ext cx="1" cy="1"/><xdr:sp><xdr:nvSpPr>'
+                '<xdr:cNvPr id="1" name="Named" descr="Description" title="Title"/>'
+                "<xdr:cNvSpPr/></xdr:nvSpPr><xdr:txBody><a:p><a:r><a:t>Text</a:t>"
+                "</a:r></a:p></xdr:txBody></xdr:sp><xdr:clientData/>"
+                "</xdr:oneCellAnchor></xdr:wsDr>"
+            ).encode(),
+        },
+    )
+
+    result = preflight_xlsx(path)
+    expected = len("NamedDescriptionTitleText")
+    assert result.native_text_chars >= expected
+
+    monkeypatch.setattr(preflight_module, "MAX_NATIVE_TEXT_CHARS", expected - 1)
+    with pytest.raises(LimitExceededError, match="native text"):
+        preflight_xlsx(path)
+
+
 @pytest.mark.parametrize(
     "xml",
     [

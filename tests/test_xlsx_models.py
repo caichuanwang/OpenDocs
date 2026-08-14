@@ -5,7 +5,14 @@ from typing import Any, cast
 
 import pytest
 
-from opendocs._models import PageBreakBlock, TableBlock, TextBlock, WarningRecord
+from opendocs._models import (
+    InlineLink,
+    PageBreakBlock,
+    ParagraphBlock,
+    TableBlock,
+    TextBlock,
+    WarningRecord,
+)
 from opendocs._native_protocol import MAX_FRAME_BYTES, encode_message
 from opendocs.errors import LimitExceededError
 from opendocs.parsers.xlsx.models import (
@@ -35,6 +42,9 @@ def _document() -> XlsxDocument:
                         anchor="A1:B2",
                         blocks=(
                             TextBlock("alpha"),
+                            ParagraphBlock(
+                                (InlineLink("docs [safe]", "https://example.test/a(b)"),)
+                            ),
                             TableBlock((("head", None), ("value", "tail")), header_rows=0),
                         ),
                     ),
