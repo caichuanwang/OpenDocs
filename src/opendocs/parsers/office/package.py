@@ -121,16 +121,19 @@ def _rels_source_base(name: str) -> str:
 
 
 def _normalize_target(base_dir: str, target: str) -> str:
-    if not target or target.startswith(("/", "\\")) or "\\" in target:
+    if not target or target.startswith(("//", "\\")) or "\\" in target:
         raise CorruptDocumentError("Office package relationship target is invalid")
-    if ":" in PurePosixPath(target).parts[:1]:
+    package_absolute = target.startswith("/")
+    candidate = target[1:] if package_absolute else target
+    first_parts = PurePosixPath(candidate).parts[:1]
+    if not candidate or (first_parts and ":" in first_parts[0]):
         raise CorruptDocumentError("Office package relationship target is invalid")
     joined = (
-        posixpath.normpath(posixpath.join(base_dir, target))
-        if base_dir
-        else posixpath.normpath(target)
+        posixpath.normpath(candidate)
+        if package_absolute or not base_dir
+        else posixpath.normpath(posixpath.join(base_dir, candidate))
     )
-    if joined.startswith("../") or joined == ".." or joined.startswith("/"):
+    if joined in {"", ".", ".."} or joined.startswith(("../", "/")):
         raise CorruptDocumentError("Office package relationship target is invalid")
     return joined
 

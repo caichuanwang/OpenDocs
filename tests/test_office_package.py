@@ -98,6 +98,84 @@ def test_validate_office_package_accepts_minimal_xlsx(tmp_path: Path) -> None:
     assert layout.main_part_name == "xl/workbook.xml"
 
 
+def test_validate_office_package_accepts_package_absolute_relationship_target(
+    tmp_path: Path,
+) -> None:
+    xlsx = tmp_path / "absolute-target.xlsx"
+    entries = minimal_xlsx_entries(include_workbook=False)
+    entries.extend(
+        [
+            (
+                "xl/workbook.xml",
+                b'<workbook xmlns="http://schemas.openxmlformats.org/'
+                b'spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/'
+                b'officeDocument/2006/relationships"><sheets><sheet name="Sheet" '
+                b'sheetId="1" r:id="rId1"/></sheets></workbook>',
+            ),
+            (
+                "xl/_rels/workbook.xml.rels",
+                b'<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/'
+                b'relationships"><Relationship Id="rId1" Type="http://schemas.'
+                b'openxmlformats.org/officeDocument/2006/relationships/worksheet" '
+                b'Target="/xl/worksheets/sheet1.xml"/></Relationships>',
+            ),
+            (
+                "xl/worksheets/sheet1.xml",
+                b'<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/'
+                b'main"><sheetData/></worksheet>',
+            ),
+        ]
+    )
+    _write_zip(xlsx, entries)
+
+    layout = validate_office_package(xlsx, document_type=DocumentType.XLSX)
+
+    assert layout.main_part_name == "xl/workbook.xml"
+
+
+@pytest.mark.parametrize(
+    "target",
+    [
+        "//server/xl/worksheets/sheet1.xml",
+        "\\xl\\worksheets\\sheet1.xml",
+        "https://example.com/sheet1.xml",
+        "C:/xl/worksheets/sheet1.xml",
+        "/../xl/worksheets/sheet1.xml",
+        "",
+    ],
+)
+def test_validate_office_package_rejects_unsafe_package_absolute_relationship_targets(
+    tmp_path: Path,
+    target: str,
+) -> None:
+    xlsx = tmp_path / "unsafe-absolute-target.xlsx"
+    entries = minimal_xlsx_entries(include_workbook=False)
+    entries.extend(
+        [
+            (
+                "xl/workbook.xml",
+                b'<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"/>',
+            ),
+            (
+                "xl/_rels/workbook.xml.rels",
+                (
+                    '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/'
+                    'relationships"><Relationship Id="rId1" Type="urn:test" '
+                    f'Target="{target}"/></Relationships>'
+                ).encode(),
+            ),
+            (
+                "xl/worksheets/sheet1.xml",
+                b'<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"/>',
+            ),
+        ]
+    )
+    _write_zip(xlsx, entries)
+
+    with pytest.raises(CorruptDocumentError, match="relationship target"):
+        validate_office_package(xlsx, document_type=DocumentType.XLSX)
+
+
 @pytest.mark.parametrize(
     "kwargs",
     [

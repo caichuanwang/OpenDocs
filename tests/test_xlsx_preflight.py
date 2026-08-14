@@ -4,6 +4,8 @@ from pathlib import Path
 from zipfile import ZIP_DEFLATED, ZipFile
 
 import pytest
+from openpyxl import Workbook
+from openpyxl.chart import BarChart, Reference
 
 import opendocs.parsers.xlsx.preflight as preflight_module
 from opendocs.errors import CorruptDocumentError, LimitExceededError, UnsupportedDocumentError
@@ -73,6 +75,26 @@ def test_preflight_preserves_worksheet_chartsheet_state_and_empty_sheet_order(
         XlsxSheetState.VISIBLE,
     ]
     assert result.serialized_cells == 2
+
+
+def test_preflight_accepts_openpyxl_package_absolute_relationship_targets(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "openpyxl.xlsx"
+    workbook = Workbook()
+    workbook.active["A1"] = "value"
+    chart = BarChart()
+    chart.add_data(Reference(workbook.active, min_col=1, min_row=1, max_row=1))
+    chart_sheet = workbook.create_chartsheet("Chart")
+    chart_sheet.add_chart(chart)
+    workbook.save(path)
+
+    result = preflight_xlsx(path)
+
+    assert [(sheet.name, sheet.kind) for sheet in result.sheets] == [
+        ("Sheet", XlsxSheetKind.WORKSHEET),
+        ("Chart", XlsxSheetKind.CHARTSHEET),
+    ]
 
 
 def test_preflight_accepts_128_sheets_and_rejects_129(tmp_path: Path) -> None:

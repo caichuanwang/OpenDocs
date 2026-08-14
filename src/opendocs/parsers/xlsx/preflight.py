@@ -373,13 +373,21 @@ def _preflight_all_xml_parts(
 
 
 def _safe_relationship_target(source_part: str, target: str) -> str:
-    if not target or target.startswith(("/", "\\")) or "\\" in target:
+    if not target or target.startswith(("//", "\\")) or "\\" in target:
         raise CorruptDocumentError("XLSX relationship target is invalid")
-    first_parts = PurePosixPath(target).parts[:1]
+    package_absolute = target.startswith("/")
+    candidate = target[1:] if package_absolute else target
+    if not candidate:
+        raise CorruptDocumentError("XLSX relationship target is invalid")
+    first_parts = PurePosixPath(candidate).parts[:1]
     if first_parts and ":" in first_parts[0]:
         raise CorruptDocumentError("XLSX relationship target is invalid")
     base = PurePosixPath(source_part).parent.as_posix()
-    normalized = posixpath.normpath(posixpath.join(base, target))
+    normalized = (
+        posixpath.normpath(candidate)
+        if package_absolute
+        else posixpath.normpath(posixpath.join(base, candidate))
+    )
     if normalized in {"", ".", ".."} or normalized.startswith(("../", "/")):
         raise CorruptDocumentError("XLSX relationship target is invalid")
     return normalized
@@ -895,7 +903,7 @@ def _require_anchor_index(value: str | None, *, maximum: int) -> int:
     return index
 
 
-def _validate_drawing_anchor(anchor: Any) -> None:
+def _validate_drawing_anchor(anchor: Any, *, allow_zero_absolute_extent: bool) -> None:
     local_name = anchor.tag.rsplit("}", 1)[-1]
     if local_name in {"oneCellAnchor", "twoCellAnchor"}:
         starts = anchor.findall(f"{{{_DRAWING_NS}}}from")
@@ -944,7 +952,12 @@ def _validate_drawing_anchor(anchor: Any) -> None:
             )
         except ValueError as error:
             raise CorruptDocumentError("XLSX drawing anchor is invalid") from error
-        if values[0] < 0 or values[1] < 0 or values[2] <= 0 or values[3] <= 0:
+        invalid_extent = (
+            values[2] < 0 or values[3] < 0
+            if allow_zero_absolute_extent
+            else values[2] <= 0 or values[3] <= 0
+        )
+        if values[0] < 0 or values[1] < 0 or invalid_extent:
             raise CorruptDocumentError("XLSX drawing anchor is invalid")
     else:
         raise CorruptDocumentError("XLSX drawing anchor is invalid")
@@ -958,6 +971,8 @@ def _preflight_drawing(
     visited_charts: set[str],
     sheet_index: int,
     unsupported_objects: list[XlsxUnsupportedObjectRef],
+    *,
+    allow_zero_absolute_extent: bool = False,
 ) -> None:
     relationships = _read_relationships(
         archive,
@@ -979,7 +994,10 @@ def _preflight_drawing(
                     f"{{{_DRAWING_NS}}}absoluteAnchor",
                 }:
                     continue
-                _validate_drawing_anchor(element)
+                _validate_drawing_anchor(
+                    element,
+                    allow_zero_absolute_extent=allow_zero_absolute_extent,
+                )
                 _increment(
                     usage,
                     "drawing_objects",
@@ -1613,6 +1631,7 @@ def _chartsheet_preflight(
                 visited_charts,
                 sheet_index,
                 unsupported_objects,
+                allow_zero_absolute_extent=True,
             )
     for relationship_id, relationship in relationships.items():
         if relationship.relationship_type == _DRAWING_RELATIONSHIP:
