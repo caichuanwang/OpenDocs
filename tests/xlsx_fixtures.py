@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import io
 from pathlib import Path
+from typing import Literal
 from zipfile import ZIP_DEFLATED, ZipFile
 
 XLSX_CONTENT_TYPE = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"
@@ -97,3 +98,101 @@ def write_xlsx(
             root_target_mode=root_target_mode,
         )
     )
+
+
+def write_structured_xlsx(
+    path: Path,
+    *,
+    sheets: tuple[
+        tuple[
+            str,
+            Literal["worksheet", "chartsheet"],
+            Literal["visible", "hidden", "veryHidden"],
+            str | None,
+            tuple[str, ...],
+        ],
+        ...,
+    ],
+) -> None:
+    workbook_sheets: list[str] = []
+    relationships: list[str] = []
+    entries = minimal_xlsx_entries(include_workbook=False)
+    for index, (name, kind, state, dimension, cells) in enumerate(sheets, start=1):
+        relationship_id = f"rId{index}"
+        workbook_sheets.append(
+            f'<sheet name="{name}" sheetId="{index}" state="{state}" r:id="{relationship_id}"/>'
+        )
+        folder = "worksheets" if kind == "worksheet" else "chartsheets"
+        relationship_type = (
+            f"http://schemas.openxmlformats.org/officeDocument/2006/relationships/{kind}"
+        )
+        relationships.append(
+            f'<Relationship Id="{relationship_id}" Type="{relationship_type}" '
+            f'Target="{folder}/sheet{index}.xml"/>'
+        )
+        if kind == "worksheet":
+            dimension_xml = f'<dimension ref="{dimension}"/>' if dimension else ""
+            cell_xml = "".join(f'<c r="{cell}"><v>1</v></c>' for cell in cells)
+            entries.append(
+                (
+                    f"xl/{folder}/sheet{index}.xml",
+                    (
+                        '<?xml version="1.0" encoding="UTF-8"?>'
+                        '<worksheet xmlns="http://schemas.openxmlformats.org/'
+                        'spreadsheetml/2006/main">'
+                        f"{dimension_xml}<sheetData><row>{cell_xml}</row></sheetData>"
+                        "</worksheet>"
+                    ).encode(),
+                )
+            )
+        else:
+            entries.append(
+                (
+                    f"xl/{folder}/sheet{index}.xml",
+                    b'<chartsheet xmlns="http://schemas.openxmlformats.org/'
+                    b'spreadsheetml/2006/main"/>',
+                )
+            )
+    entries.extend(
+        [
+            (
+                "xl/workbook.xml",
+                (
+                    '<?xml version="1.0" encoding="UTF-8"?>'
+                    '<workbook xmlns="http://schemas.openxmlformats.org/'
+                    'spreadsheetml/2006/main" '
+                    'xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/'
+                    'relationships"><sheets>'
+                    f"{''.join(workbook_sheets)}"
+                    "</sheets></workbook>"
+                ).encode(),
+            ),
+            (
+                "xl/_rels/workbook.xml.rels",
+                (
+                    '<?xml version="1.0" encoding="UTF-8"?>'
+                    '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/'
+                    f'relationships">{"".join(relationships)}</Relationships>'
+                ).encode(),
+            ),
+        ]
+    )
+    with ZipFile(path, "w", ZIP_DEFLATED) as archive:
+        for name, data in entries:
+            archive.writestr(name, data)
+
+
+def rewrite_xlsx(
+    path: Path,
+    replacements: dict[str, bytes | None],
+) -> None:
+    with ZipFile(path) as archive:
+        entries = {info.filename: archive.read(info) for info in archive.infolist()}
+    for name, data in replacements.items():
+        if data is None:
+            entries.pop(name, None)
+        else:
+            entries[name] = data
+    with ZipFile(path, "w", ZIP_DEFLATED) as archive:
+        for name, data in entries.items():
+            archive.writestr(name, data)

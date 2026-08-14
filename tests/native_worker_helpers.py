@@ -52,3 +52,35 @@ def noisy_echo(value: object) -> object:
 
 def make_bytes(size: int) -> bytes:
     return b"x" * size
+
+
+def make_xlsx_wire(block_count: int) -> dict[str, object]:
+    from opendocs._models import TextBlock
+    from opendocs.parsers.xlsx.models import (
+        XlsxDocument,
+        XlsxNativeSlot,
+        XlsxSheet,
+        XlsxSheetKind,
+        XlsxSheetState,
+        document_to_wire,
+    )
+
+    return document_to_wire(
+        XlsxDocument(
+            sheets=(
+                XlsxSheet(
+                    sheet_index=1,
+                    name="Sheet",
+                    kind=XlsxSheetKind.WORKSHEET,
+                    state=XlsxSheetState.VISIBLE,
+                    slots=(
+                        XlsxNativeSlot(
+                            source_index=0,
+                            anchor="A1",
+                            blocks=tuple(TextBlock("x" * 200) for _ in range(block_count)),
+                        ),
+                    ),
+                ),
+            )
+        )
+    )
