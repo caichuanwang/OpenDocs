@@ -316,7 +316,10 @@ def _safe_link_target(target: str) -> bool:
         return not any(character.isspace() for character in target)
     if any(character.isspace() or ord(character) < 32 for character in target):
         return False
-    return urlsplit(target).scheme.lower() in _SAFE_LINK_SCHEMES
+    try:
+        return urlsplit(target).scheme.lower() in _SAFE_LINK_SCHEMES
+    except ValueError:
+        return False
 
 
 def _internal_target(location: str) -> str:

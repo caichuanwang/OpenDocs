@@ -247,7 +247,8 @@ def _cache_values(reference: Any) -> tuple[str, ...] | None:
         (
             child
             for child in reference
-            if _local_name(child) in {"strCache", "numCache", "multiLvlStrCache"}
+            if _local_name(child)
+            in {"strCache", "numCache", "multiLvlStrCache", "strLit", "numLit", "multiLvlStrLit"}
         ),
         None,
     )
@@ -358,7 +359,15 @@ def _reference_values(
         (
             node
             for node in container.iter()
-            if _local_name(node) in {"strRef", "numRef", "multiLvlStrRef"}
+            if _local_name(node)
+            in {
+                "strRef",
+                "numRef",
+                "multiLvlStrRef",
+                "strLit",
+                "numLit",
+                "multiLvlStrLit",
+            }
         ),
         None,
     )
@@ -467,12 +476,10 @@ def _chart_facts(
     plot_area = chart.find(f"{{{_CHART_NS}}}plotArea") if chart is not None else None
     if chart is None or plot_area is None:
         raise CorruptDocumentError("XLSX chart part is corrupt")
-    chart_node = next(
-        (child for child in plot_area if _local_name(child) in _CHART_TYPES),
-        None,
-    )
-    if chart_node is None:
+    chart_nodes = [child for child in plot_area if _local_name(child) in _CHART_TYPES]
+    if not chart_nodes:
         raise _UnsupportedChartType
+    chart_node = chart_nodes[0]
     chart_type = _CHART_TYPES[_local_name(chart_node)]
     chart_title = chart.find(f"{{{_CHART_NS}}}title")
     title_values, title_formulas, title_unresolved = _reference_values(
@@ -512,8 +519,13 @@ def _chart_facts(
         formulas=tuple(dict.fromkeys((*title_formulas, *axis_formulas))),
         unresolved_formulas=tuple(dict.fromkeys((*title_unresolved, *axis_unresolved))),
         series=tuple(
-            _series_facts(series, chart_type=chart_type, workbook_values=workbook_values)
-            for series in chart_node.findall(f"{{{_CHART_NS}}}ser")
+            _series_facts(
+                series,
+                chart_type=_CHART_TYPES[_local_name(node)],
+                workbook_values=workbook_values,
+            )
+            for node in chart_nodes
+            for series in node.findall(f"{{{_CHART_NS}}}ser")
         ),
     )
 

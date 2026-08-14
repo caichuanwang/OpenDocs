@@ -68,6 +68,26 @@ def test_format_saved_value_supports_common_twelve_hour_time() -> None:
 
 
 @pytest.mark.parametrize(
+    ("value", "number_format", "expected"),
+    [
+        (Decimal("1234567"), "#,##0,", "1,235"),
+        (Decimal("1234567"), "#,##0,,", "1"),
+        (time(1, 2, 3), "mm:ss", "02:03"),
+        (time(1, 2, 3), "ss", "03"),
+    ],
+)
+def test_format_saved_value_handles_scaled_and_partial_time_formats(
+    value: object,
+    number_format: str,
+    expected: str,
+) -> None:
+    result = format_saved_value(value, number_format, epoch=WINDOWS_EPOCH)
+
+    assert result.text == expected
+    assert result.warning is None
+
+
+@pytest.mark.parametrize(
     "number_format",
     [
         "0.00E+00",

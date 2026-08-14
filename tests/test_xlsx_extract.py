@@ -32,6 +32,7 @@ from PIL import Image as PILImage
 
 import opendocs.parsers.xlsx.extract as extract_module
 import opendocs.parsers.xlsx.media as media_module
+import opendocs.parsers.xlsx.text_objects as text_objects_module
 from opendocs._models import (
     DocumentType,
     HeadingBlock,
@@ -1244,6 +1245,10 @@ def test_unsafe_hyperlinks_and_remote_data_are_plain_text_and_never_accessed(
     ]
     assert len(external_warnings) == 5
     assert all("sheet=1" in warning.message for warning in external_warnings)
+
+
+def test_malformed_hyperlink_target_is_plain_text() -> None:
+    assert text_objects_module._safe_link_target("http://[::1") is False
 
 
 def test_unsupported_xlsx_objects_are_locatable_and_aggregated(tmp_path: Path) -> None:

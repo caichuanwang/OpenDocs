@@ -199,6 +199,11 @@ def _format_number(value: Decimal, number_format: str) -> str | None:
 
     percent_count = pattern.count("%")
     magnitude = abs(value) * (Decimal(100) ** percent_count)
+    integer_pattern = pattern.split(".", 1)[0]
+    scale_commas = len(integer_pattern) - len(integer_pattern.rstrip(","))
+    if scale_commas:
+        magnitude /= Decimal(1000) ** scale_commas
+        integer_pattern = integer_pattern.rstrip(",")
     minimum_decimals, maximum_decimals = _decimal_places(pattern)
     if maximum_decimals:
         quantum = Decimal(1).scaleb(-maximum_decimals)
@@ -213,7 +218,6 @@ def _format_number(value: Decimal, number_format: str) -> str | None:
         rendered = str(magnitude.quantize(Decimal(1), rounding=ROUND_HALF_UP))
 
     integer, separator, fraction = rendered.partition(".")
-    integer_pattern = pattern.split(".", 1)[0]
     if "," in integer_pattern:
         integer = f"{int(integer):,}"
     rendered = integer + (separator + fraction if separator else "")
@@ -248,6 +252,12 @@ def _render_clock(value: time, number_format: str) -> str:
     raw_hour = value.hour % 12 or 12 if twelve_hour else value.hour
     hour_token = re.search(r"(?<!\[)(h{1,2})", lowered)
     minute_token = re.search(r"(?<=:)(m{1,2})", lowered)
+    if hour_token is None:
+        minute_only = re.fullmatch(r"m{1,2}:s{1,2}(?:\.[0#]+)?", lowered)
+        if minute_only is not None:
+            return f"{value.minute:02d}:{value.second:02d}"
+        if re.fullmatch(r"s{1,2}(?:\.[0#]+)?", lowered):
+            return f"{value.second:02d}"
     hour = (
         f"{raw_hour:02d}"
         if hour_token is not None and len(hour_token.group(1)) == 2
