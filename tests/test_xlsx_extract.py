@@ -855,28 +855,27 @@ def test_extract_loads_full_mode_openpyxl_once_with_links_disabled(
     workbook.active["A1"] = "value"
     workbook.save(path)
     index = preflight_xlsx(path)
-    calls: list[tuple[Path, dict[str, object]]] = []
+    calls: list[tuple[object, dict[str, object], bool]] = []
     original = extract_module.openpyxl.load_workbook
 
-    def recording_loader(filename: Path, **kwargs: object) -> object:
-        calls.append((filename, kwargs))
+    def recording_loader(filename: object, **kwargs: object) -> object:
+        calls.append((filename, kwargs, bool(getattr(filename, "closed", True))))
         return original(filename, **kwargs)
 
     monkeypatch.setattr(extract_module.openpyxl, "load_workbook", recording_loader)
 
     extract_xlsx(path, index)
 
-    assert calls == [
-        (
-            path,
-            {
-                "read_only": False,
-                "data_only": False,
-                "rich_text": False,
-                "keep_links": False,
-            },
-        )
-    ]
+    assert len(calls) == 1
+    filename, kwargs, was_closed = calls[0]
+    assert Path(cast(Any, filename).name) == path
+    assert was_closed is False
+    assert kwargs == {
+        "read_only": False,
+        "data_only": False,
+        "rich_text": False,
+        "keep_links": False,
+    }
 
 
 def test_formula_sidecar_prefers_cache_and_distinguishes_missing_empty_and_special_formulas(

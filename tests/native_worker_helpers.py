@@ -24,6 +24,10 @@ def sleep_and_echo(delay: float, value: object) -> object:
     return value
 
 
+def hard_exit(status: int) -> None:
+    os._exit(status)
+
+
 def raise_corrupt(message: str) -> None:
     raise CorruptDocumentError(message)
 

@@ -794,13 +794,14 @@ def extract_xlsx(
                 f"object={warning.object_ordinal}: {warning.detail}"
             ),
         )
-    workbook = openpyxl.load_workbook(
-        path,
-        read_only=False,
-        data_only=False,
-        rich_text=False,
-        keep_links=False,
-    )
+    with path.open("rb") as package:
+        workbook = openpyxl.load_workbook(
+            package,
+            read_only=False,
+            data_only=False,
+            rich_text=False,
+            keep_links=False,
+        )
     try:
         worksheets = {worksheet.title: worksheet for worksheet in workbook.worksheets}
         sheet_values: dict[int, tuple[dict[_Coordinate, str], set[_Coordinate]]] = {}

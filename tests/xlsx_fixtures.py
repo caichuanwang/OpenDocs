@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import io
+from datetime import date
 from pathlib import Path
 from typing import Literal
 from zipfile import ZIP_DEFLATED, ZipFile
+
+from openpyxl import Workbook
 
 XLSX_CONTENT_TYPE = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"
 OFFICE_DOCUMENT_RELATIONSHIP = (
@@ -196,3 +199,35 @@ def rewrite_xlsx(
     with ZipFile(path, "w", ZIP_DEFLATED) as archive:
         for name, data in entries.items():
             archive.writestr(name, data)
+
+
+def write_public_contract_xlsx(path: Path) -> None:
+    workbook = Workbook()
+    ledger = workbook.active
+    ledger.title = "Ledger"
+    ledger.append(("Item", "Amount", "Date", "Formula", "Scientific"))
+    ledger.append(("Book", 1234.5, date(2026, 8, 14), "=B2*2", 1200))
+    ledger["B2"].number_format = "$#,##0.00"
+    ledger["C2"].number_format = "yyyy-mm-dd"
+    ledger["E2"].number_format = "0.00E+00"
+    ledger["A4"] = "Merged note"
+    ledger.merge_cells("A4:B4")
+
+    hidden = workbook.create_sheet("Hidden")
+    hidden.sheet_state = "hidden"
+    hidden["A1"] = "hidden value"
+    very_hidden = workbook.create_sheet("Very Hidden")
+    very_hidden.sheet_state = "veryHidden"
+    very_hidden["A1"] = "very hidden value"
+    workbook.create_sheet("Empty")
+    workbook.save(path)
+    workbook.close()
+
+    with ZipFile(path) as archive:
+        worksheet = archive.read("xl/worksheets/sheet1.xml")
+    formula = b'<c r="D2"><f>B2*2</f><v></v></c>'
+    assert formula in worksheet
+    rewrite_xlsx(
+        path,
+        {"xl/worksheets/sheet1.xml": worksheet.replace(formula, formula.replace(b"<v></v>", b""))},
+    )

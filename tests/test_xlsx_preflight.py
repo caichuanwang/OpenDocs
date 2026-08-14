@@ -7,6 +7,7 @@ import pytest
 from openpyxl import Workbook
 from openpyxl.chart import BarChart, Reference
 
+import opendocs.parsers.xlsx.parser as parser_module
 import opendocs.parsers.xlsx.preflight as preflight_module
 from opendocs._models import HeadingBlock, InlineText
 from opendocs._runtime import ParserRuntime
@@ -14,6 +15,7 @@ from opendocs.errors import CorruptDocumentError, LimitExceededError
 from opendocs.options import ParseOptions
 from opendocs.parsers.xlsx import XlsxParser
 from opendocs.parsers.xlsx.models import XlsxSheetKind, XlsxSheetState
+from opendocs.parsers.xlsx.parser import _extract_xlsx_to_wire
 from opendocs.parsers.xlsx.preflight import MAX_SHEETS, preflight_xlsx
 from opendocs.source import ParseWorkspace, ResolvedSource
 from tests.xlsx_fixtures import rewrite_xlsx, write_structured_xlsx
@@ -880,3 +882,128 @@ def test_materialized_grid_and_native_text_have_independent_outer_limits(
     )
     with pytest.raises(LimitExceededError, match="native text"):
         preflight_xlsx(path)
+
+
+def test_representative_adversarial_limits_stop_before_any_expensive_xlsx_stage(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def forbidden_extract(*args: object, **kwargs: object) -> object:
+        del args, kwargs
+        raise AssertionError("XLSX extraction, materialization, and vision must not start")
+
+    monkeypatch.setattr(parser_module, "extract_xlsx", forbidden_extract)
+    cases: list[tuple[Path, type[BaseException]]] = []
+
+    zip_bomb = tmp_path / "zip-bomb.xlsx"
+    _one_sheet(zip_bomb)
+    with ZipFile(zip_bomb, "a", ZIP_DEFLATED) as archive:
+        archive.writestr("xl/filler.bin", b"x" * 200_000)
+    cases.append((zip_bomb, LimitExceededError))
+
+    entity = tmp_path / "entity.xlsx"
+    _one_sheet(entity)
+    rewrite_xlsx(
+        entity,
+        {
+            "xl/worksheets/sheet1.xml": (
+                b'<!DOCTYPE worksheet [<!ENTITY x "boom">]><worksheet xmlns="'
+                + SHEET_NS.encode()
+                + b'"><sheetData><row><c r="A1"><v>&x;</v></c></row></sheetData></worksheet>'
+            )
+        },
+    )
+    cases.append((entity, CorruptDocumentError))
+
+    dimension = tmp_path / "dimension.xlsx"
+    write_structured_xlsx(
+        dimension,
+        sheets=(("Sparse", "worksheet", "visible", "A1:XFD1048576", ("A1",)),),
+    )
+    cases.append((dimension, LimitExceededError))
+
+    merge = tmp_path / "merge.xlsx"
+    _one_sheet(merge)
+    monkeypatch.setattr(preflight_module, "MAX_MERGE_RANGES", 1)
+    rewrite_xlsx(
+        merge,
+        {
+            "xl/worksheets/sheet1.xml": _worksheet(
+                '<dimension ref="A1:D1"/><sheetData/><mergeCells>'
+                '<mergeCell ref="A1:B1"/><mergeCell ref="C1:D1"/></mergeCells>'
+            )
+        },
+    )
+    cases.append((merge, LimitExceededError))
+
+    shared_strings = tmp_path / "shared-strings.xlsx"
+    _one_sheet(shared_strings)
+    monkeypatch.setattr(preflight_module, "MAX_SHARED_STRINGS", 1)
+    rewrite_xlsx(
+        shared_strings,
+        {
+            "xl/_rels/workbook.xml.rels": _relationships(
+                ("rId1", f"{OFFICE_REL_NS}/worksheet", "worksheets/sheet1.xml"),
+                ("rIdS", f"{OFFICE_REL_NS}/sharedStrings", "sharedStrings.xml"),
+            ),
+            "xl/sharedStrings.xml": (
+                f'<sst xmlns="{SHEET_NS}"><si><t>one</t></si><si><t>two</t></si></sst>'
+            ).encode(),
+        },
+    )
+    cases.append((shared_strings, LimitExceededError))
+
+    objects = tmp_path / "objects.xlsx"
+    _one_sheet(objects)
+    monkeypatch.setattr(preflight_module, "MAX_DRAWING_OBJECTS", 1)
+    rewrite_xlsx(
+        objects,
+        {
+            "xl/worksheets/_rels/sheet1.xml.rels": _relationships(
+                ("rIdO1", f"{OFFICE_REL_NS}/oleObject", "../embeddings/one.bin"),
+                ("rIdO2", f"{OFFICE_REL_NS}/oleObject", "../embeddings/two.bin"),
+            ),
+            "xl/embeddings/one.bin": b"one",
+            "xl/embeddings/two.bin": b"two",
+        },
+    )
+    cases.append((objects, LimitExceededError))
+
+    chart_cache = tmp_path / "chart-cache.xlsx"
+    _one_sheet(chart_cache)
+    monkeypatch.setattr(preflight_module, "MAX_CHART_CACHE_POINTS", 1)
+    drawing_ns = "http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing"
+    chart_ns = "http://schemas.openxmlformats.org/drawingml/2006/chart"
+    rewrite_xlsx(
+        chart_cache,
+        {
+            "xl/worksheets/sheet1.xml": _worksheet(
+                '<dimension ref="A1"/><sheetData/><drawing r:id="rIdD"/>'
+            ),
+            "xl/worksheets/_rels/sheet1.xml.rels": _relationships(
+                ("rIdD", f"{OFFICE_REL_NS}/drawing", "../drawings/drawing1.xml"),
+            ),
+            "xl/drawings/drawing1.xml": (
+                f'<xdr:wsDr xmlns:xdr="{drawing_ns}" xmlns:c="{chart_ns}" '
+                f'xmlns:r="{OFFICE_REL_NS}"><xdr:oneCellAnchor><xdr:from>'
+                "<xdr:col>0</xdr:col><xdr:row>0</xdr:row></xdr:from>"
+                '<xdr:ext cx="1" cy="1"/><xdr:graphicFrame><c:chart r:id="rIdC"/>'
+                "</xdr:graphicFrame><xdr:clientData/></xdr:oneCellAnchor></xdr:wsDr>"
+            ).encode(),
+            "xl/drawings/_rels/drawing1.xml.rels": _relationships(
+                ("rIdC", f"{OFFICE_REL_NS}/chart", "../charts/chart1.xml"),
+            ),
+            "xl/charts/chart1.xml": (
+                f'<c:chartSpace xmlns:c="{chart_ns}"><c:numCache>'
+                '<c:pt idx="0"><c:v>1</c:v></c:pt><c:pt idx="1"><c:v>2</c:v></c:pt>'
+                "</c:numCache></c:chartSpace>"
+            ).encode(),
+        },
+    )
+    cases.append((chart_cache, LimitExceededError))
+
+    for path, error_type in cases:
+        artifact_dir = tmp_path / f"{path.stem}-artifacts"
+        with pytest.raises(error_type):
+            _extract_xlsx_to_wire(path, artifact_dir)
+        assert not artifact_dir.exists()
