@@ -51,7 +51,12 @@ def _normalize_cell_newlines(value: str) -> str:
 
 def _escape_pipe_cell(value: str) -> str:
     value = _normalize_cell_newlines(value)
-    return value.replace("\\", "\\\\").replace("|", "\\|").replace("\n", "<br>")
+    return (
+        html.escape(value, quote=False)
+        .replace("\\", "\\\\")
+        .replace("|", "\\|")
+        .replace("\n", "<br>")
+    )
 
 
 def _escape_html_cell(value: str) -> str:
