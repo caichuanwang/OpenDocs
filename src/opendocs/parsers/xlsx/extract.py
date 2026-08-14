@@ -52,6 +52,7 @@ _CELL_TAG = f"{{{_SPREADSHEET_NS}}}c"
 _FORMULA_TAG = f"{{{_SPREADSHEET_NS}}}f"
 _VALUE_TAG = f"{{{_SPREADSHEET_NS}}}v"
 _WARNING_LIMIT_PER_CODE = 20
+_MAX_EXCEL_COLUMN = 16_384
 _EXTERNAL_FORMULA_REFERENCE = re.compile(r"\[[^\]\r\n]+\][^!\r\n]*!")
 
 _Coordinate = tuple[int, int]
@@ -392,8 +393,11 @@ def _formula_text(
     return _literal_formula_text(record, loaded_value) or "Formula expression unavailable"
 
 
-def _conditional_number_format_ranges(worksheet: Any) -> tuple[Any, ...]:
-    ranges: list[Any] = []
+def _conditional_number_format_coordinates(
+    worksheet: Any,
+    records: tuple[_CellRecord, ...],
+) -> frozenset[str]:
+    events: list[tuple[int, int, int, int]] = []
     for conditional in worksheet.conditional_formatting:
         rules = worksheet.conditional_formatting[conditional]
         changes_number_format = False
@@ -404,12 +408,55 @@ def _conditional_number_format_ranges(worksheet: Any) -> tuple[Any, ...]:
             elif getattr(rule, "dxfId", None) is not None:
                 changes_number_format = True
         if changes_number_format:
-            ranges.append(conditional.sqref)
-    return tuple(ranges)
+            for cell_range in conditional.sqref.ranges:
+                events.append(
+                    (
+                        cell_range.min_row,
+                        1,
+                        cell_range.min_col,
+                        cell_range.max_col,
+                    )
+                )
+                events.append(
+                    (
+                        cell_range.max_row + 1,
+                        -1,
+                        cell_range.min_col,
+                        cell_range.max_col,
+                    )
+                )
+    if not events or not records:
+        return frozenset()
 
+    events.sort()
+    indexed_records = sorted(
+        (coordinate_to_tuple(record.coordinate), record.coordinate) for record in records
+    )
+    column_deltas = [0] * (_MAX_EXCEL_COLUMN + 2)
 
-def _has_conditional_number_format(coordinate: str, ranges: tuple[Any, ...]) -> bool:
-    return any(coordinate in cell_range for cell_range in ranges)
+    def update(column: int, delta: int) -> None:
+        while column < len(column_deltas):
+            column_deltas[column] += delta
+            column += column & -column
+
+    def active_at(column: int) -> int:
+        total = 0
+        while column > 0:
+            total += column_deltas[column]
+            column -= column & -column
+        return total
+
+    affected: set[str] = set()
+    event_index = 0
+    for (row, column), coordinate in indexed_records:
+        while event_index < len(events) and events[event_index][0] <= row:
+            _, delta, minimum_column, maximum_column = events[event_index]
+            update(minimum_column, delta)
+            update(maximum_column + 1, -delta)
+            event_index += 1
+        if active_at(column) > 0:
+            affected.add(coordinate)
+    return frozenset(affected)
 
 
 def _cell_texts(
@@ -422,13 +469,10 @@ def _cell_texts(
 ) -> tuple[dict[_Coordinate, str], set[_Coordinate]]:
     texts: dict[_Coordinate, str] = {}
     semantic: set[_Coordinate] = set()
-    conditional_ranges = _conditional_number_format_ranges(worksheet)
+    conditional_coordinates = _conditional_number_format_coordinates(worksheet, records)
     for record in records:
         cell = worksheet[record.coordinate]
-        conditional_number_format = _has_conditional_number_format(
-            record.coordinate,
-            conditional_ranges,
-        )
+        conditional_number_format = record.coordinate in conditional_coordinates
         if record.formula is not None:
             text = _formula_text(
                 record,

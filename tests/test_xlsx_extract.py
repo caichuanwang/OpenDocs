@@ -286,6 +286,24 @@ def test_chart_cache_wins_and_unsupported_references_are_preserved_without_acces
     assert [warning.code for warning in document.warnings].count("xlsx_external_reference") == 2
 
 
+def test_oversized_local_chart_reference_is_not_materialized(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def forbidden_column_name(column: int) -> str:
+        del column
+        raise AssertionError("oversized chart references must not be materialized")
+
+    monkeypatch.setattr(media_module, "get_column_letter", forbidden_column_name)
+
+    assert (
+        media_module._resolve_local_formula(
+            "Data!$A$1:$XFD$13",
+            {"Data": {}},
+        )
+        is None
+    )
+
+
 def test_multiple_chart_reference_warnings_stay_bound_to_their_occurrence(
     tmp_path: Path,
 ) -> None:
@@ -823,6 +841,7 @@ def test_extract_aggregates_number_format_warnings_after_twenty_coordinates(
 
 def test_extract_falls_back_when_conditional_rule_can_change_number_format(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     path = tmp_path / "conditional-number-format.xlsx"
     workbook = Workbook()
@@ -837,6 +856,17 @@ def test_extract_falls_back_when_conditional_rule_can_change_number_format(
         ),
     )
     workbook.save(path)
+
+    def forbidden_linear_scan(coordinate: str, ranges: tuple[Any, ...]) -> bool:
+        del coordinate, ranges
+        raise AssertionError("conditional formats must not scan every range per cell")
+
+    monkeypatch.setattr(
+        extract_module,
+        "_has_conditional_number_format",
+        forbidden_linear_scan,
+        raising=False,
+    )
 
     document = extract_xlsx(path, preflight_xlsx(path))
 

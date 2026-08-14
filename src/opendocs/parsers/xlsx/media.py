@@ -313,6 +313,25 @@ def _resolve_local_formula(
     formula: str,
     workbook_values: dict[str, dict[str, str]],
 ) -> tuple[str, ...] | None:
+    local_range = _local_formula_range(formula, workbook_values)
+    if local_range is None:
+        return None
+    values, bounds = local_range
+    minimum_column, minimum_row, maximum_column, maximum_row = bounds
+    point_count = (maximum_column - minimum_column + 1) * (maximum_row - minimum_row + 1)
+    if point_count > MAX_CHART_CACHE_POINTS:
+        return None
+    return tuple(
+        values.get(f"{get_column_letter(column)}{row}", "")
+        for row in range(minimum_row, maximum_row + 1)
+        for column in range(minimum_column, maximum_column + 1)
+    )
+
+
+def _local_formula_range(
+    formula: str,
+    workbook_values: dict[str, dict[str, str]],
+) -> tuple[dict[str, str], tuple[int, int, int, int]] | None:
     match = _LOCAL_RANGE.fullmatch(formula.removeprefix("="))
     if match is None:
         return None
@@ -323,16 +342,10 @@ def _resolve_local_formula(
     start = match.group("start").replace("$", "").upper()
     end = (match.group("end") or start).replace("$", "").upper()
     try:
-        minimum_column, minimum_row, maximum_column, maximum_row = range_boundaries(
-            f"{start}:{end}"
-        )
+        bounds = range_boundaries(f"{start}:{end}")
     except ValueError:
         return None
-    return tuple(
-        values.get(f"{get_column_letter(column)}{row}", "")
-        for row in range(minimum_row, maximum_row + 1)
-        for column in range(minimum_column, maximum_column + 1)
-    )
+    return values, bounds
 
 
 def _reference_values(
@@ -354,10 +367,11 @@ def _reference_values(
         return ((direct.text or "",), (), ()) if direct is not None else ((), (), ())
     formula = reference.findtext(f"{{{_CHART_NS}}}f", "").strip()
     formulas = (formula,) if formula else ()
-    resolved = _resolve_local_formula(formula, workbook_values) if formula else None
     cached = _cache_values(reference)
     if cached is not None:
-        return cached, formulas, () if resolved is not None else formulas
+        local_range = _local_formula_range(formula, workbook_values) if formula else None
+        return cached, formulas, () if local_range is not None else formulas
+    resolved = _resolve_local_formula(formula, workbook_values) if formula else None
     if resolved is not None:
         return resolved, formulas, ()
     return (), formulas, formulas
