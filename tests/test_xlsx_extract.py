@@ -1,21 +1,37 @@
 from __future__ import annotations
 
+import hashlib
 import socket
 import urllib.request
+from copy import deepcopy
+from dataclasses import replace
 from pathlib import Path
+from typing import Any, cast
 from zipfile import ZipFile
 
 import pytest
 from openpyxl import Workbook
-from openpyxl.chart import BarChart, Reference
+from openpyxl.chart import (
+    BarChart,
+    DoughnutChart,
+    LineChart,
+    PieChart,
+    Reference,
+    ScatterChart,
+    Series,
+)
+from openpyxl.chart.label import DataLabelList
 from openpyxl.comments import Comment
+from openpyxl.drawing.image import Image
 from openpyxl.formatting.rule import Rule
 from openpyxl.styles import Font
 from openpyxl.styles.differential import DifferentialStyle
 from openpyxl.styles.numbers import NumberFormat
 from openpyxl.worksheet.table import Table
+from PIL import Image as PILImage
 
 import opendocs.parsers.xlsx.extract as extract_module
+import opendocs.parsers.xlsx.media as media_module
 from opendocs._models import (
     DocumentType,
     HeadingBlock,
@@ -27,10 +43,22 @@ from opendocs._models import (
     SpannedTableBlock,
     TableBlock,
 )
-from opendocs.errors import CorruptDocumentError, LimitExceededError
+from opendocs.errors import CorruptDocumentError, DocumentTypeMismatchError, LimitExceededError
 from opendocs.markdown import render_markdown
 from opendocs.parsers.xlsx.extract import extract_xlsx
-from opendocs.parsers.xlsx.models import XlsxNativeSlot, XlsxSheet, XlsxSheetKind, XlsxSheetState
+from opendocs.parsers.xlsx.media import (
+    XLSX_CHART_VISION_PROMPT,
+    build_xlsx_visual_requests,
+    prepare_xlsx_visual_artifact,
+)
+from opendocs.parsers.xlsx.models import (
+    XlsxChartSlot,
+    XlsxImageSlot,
+    XlsxNativeSlot,
+    XlsxSheet,
+    XlsxSheetKind,
+    XlsxSheetState,
+)
 from opendocs.parsers.xlsx.preflight import preflight_xlsx
 from tests.xlsx_fixtures import rewrite_xlsx
 
@@ -102,6 +130,505 @@ def _native_slots(document_sheet: XlsxSheet) -> tuple[XlsxNativeSlot, ...]:
     return tuple(slot for slot in document_sheet.slots if isinstance(slot, XlsxNativeSlot))
 
 
+def _visual_slots(document_sheet: XlsxSheet) -> tuple[XlsxImageSlot | XlsxChartSlot, ...]:
+    return tuple(
+        slot for slot in document_sheet.slots if isinstance(slot, XlsxImageSlot | XlsxChartSlot)
+    )
+
+
+def _write_png(path: Path, *, color: str = "navy") -> bytes:
+    image = PILImage.new("RGB", (32, 16), color)
+    try:
+        image.save(path, format="PNG")
+    finally:
+        image.close()
+    return path.read_bytes()
+
+
+def test_extracts_native_chart_facts_and_raw_image_artifacts(tmp_path: Path) -> None:
+    path = tmp_path / "visuals.xlsx"
+    source_image = tmp_path / "source.png"
+    image_bytes = _write_png(source_image)
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.title = "Sales Data"
+    for row in (("Month", "Revenue"), ("Jan", 10), ("Feb", 15), ("Mar", 12)):
+        sheet.append(row)
+    chart = LineChart()
+    chart.title = "Revenue trend"
+    cast(Any, chart.x_axis).title = "Month"
+    cast(Any, chart.y_axis).title = "USD"
+    chart.dataLabels = DataLabelList(showVal=True)
+    chart.add_data(Reference(sheet, min_col=2, min_row=1, max_row=4), titles_from_data=True)
+    chart.set_categories(Reference(sheet, min_col=1, min_row=2, max_row=4))
+    sheet.add_chart(chart, "D2")
+    embedded = Image(source_image)
+    sheet.add_image(embedded, "K3")
+    workbook.save(path)
+    with ZipFile(path) as archive:
+        drawing_xml = archive.read("xl/drawings/drawing1.xml")
+    assert b'name="Chart 1"' in drawing_xml
+    assert b'name="Image 2" descr="Picture"' in drawing_xml
+    drawing_xml = drawing_xml.replace(
+        b'name="Chart 1"',
+        b'name="Chart 1" descr="chart description" title="chart title"',
+    ).replace(
+        b'name="Image 2" descr="Picture"',
+        b'name="Image 2" descr="image description" title="image title"',
+    )
+    rewrite_xlsx(path, {"xl/drawings/drawing1.xml": drawing_xml})
+    artifacts = tmp_path / "artifacts"
+
+    document = extract_xlsx(path, preflight_xlsx(path), artifact_dir=artifacts)
+
+    slots = _visual_slots(document.sheets[0])
+    chart_slot = next(slot for slot in slots if isinstance(slot, XlsxChartSlot))
+    image_slot = next(slot for slot in slots if isinstance(slot, XlsxImageSlot))
+    assert chart_slot.anchor == "D2"
+    assert image_slot.anchor == "K3"
+    assert image_slot.content_sha256 == hashlib.sha256(image_bytes).hexdigest()
+    assert (chart_slot.object_name, chart_slot.alt_text, chart_slot.title) == (
+        "Chart 1",
+        "chart description",
+        "chart title",
+    )
+    assert (image_slot.object_name, image_slot.alt_text, image_slot.title) == (
+        "Image 2",
+        "image description",
+        "image title",
+    )
+    assert (artifacts / image_slot.artifact_name).read_bytes() == image_bytes
+    chart_bytes = (artifacts / chart_slot.artifact_name).read_bytes()
+    assert chart_bytes.startswith(b"\x89PNG\r\n\x1a\n")
+    assert chart_slot.content_sha256 == hashlib.sha256(chart_bytes).hexdigest()
+    headings = [block for block in chart_slot.blocks if isinstance(block, HeadingBlock)]
+    tables = [block for block in chart_slot.blocks if isinstance(block, TableBlock)]
+    paragraphs = [block for block in chart_slot.blocks if isinstance(block, ParagraphBlock)]
+    assert headings[0].inlines == (InlineText("Revenue trend"),)
+    assert tables == [
+        TableBlock(
+            (
+                ("Series", "Revenue", "Category", "Jan", "Value", "10"),
+                ("Series", "Revenue", "Category", "Feb", "Value", "15"),
+                ("Series", "Revenue", "Category", "Mar", "Value", "12"),
+            ),
+            header_rows=0,
+        )
+    ]
+    paragraph_text = "\n".join(
+        "".join(inline.text for inline in block.inlines if isinstance(inline, InlineText))
+        for block in paragraphs
+    )
+    assert "Axis titles: Month; USD" in paragraph_text
+    assert "Data labels: value" in paragraph_text
+    assert "'Sales Data'!$A$2:$A$4" in paragraph_text
+    assert "'Sales Data'!$B$2:$B$4" in paragraph_text
+
+
+def test_chart_cache_wins_and_unsupported_references_are_preserved_without_access(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    path = tmp_path / "chart-references.xlsx"
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.title = "Quoted Sheet"
+    for row in (("Label", "Value"), ("local", 1), ("ignored", 2)):
+        sheet.append(row)
+    chart = BarChart()
+    chart.add_data(Reference(sheet, min_col=2, min_row=1, max_row=3), titles_from_data=True)
+    chart.set_categories(Reference(sheet, min_col=1, min_row=2, max_row=3))
+    sheet.add_chart(chart, "D4")
+    workbook.save(path)
+    with ZipFile(path) as archive:
+        chart_xml = archive.read("xl/charts/chart1.xml")
+    chart_xml = chart_xml.replace(
+        b"<strRef><f>'Quoted Sheet'!B1</f></strRef>",
+        (
+            b"<strRef><f>'Quoted Sheet'!B1</f><strCache><ptCount val=\"1\"/>"
+            b'<pt idx="0"><v>Cached series</v></pt></strCache></strRef>'
+        ),
+    )
+    chart_xml = chart_xml.replace(
+        b"<numRef><f>'Quoted Sheet'!$A$2:$A$3</f></numRef>",
+        b"<numRef><f>[Book.xlsx]Quoted Sheet!$A$2:$A$3</f></numRef>",
+    )
+    chart_xml = chart_xml.replace(
+        b"<numRef><f>'Quoted Sheet'!$B$2:$B$3</f></numRef>",
+        b"<numRef><f>DynamicName</f></numRef>",
+    )
+    rewrite_xlsx(path, {"xl/charts/chart1.xml": chart_xml})
+
+    def forbidden_network(*args: object, **kwargs: object) -> object:
+        del args, kwargs
+        raise AssertionError("chart references must not access the network")
+
+    monkeypatch.setattr(socket, "create_connection", forbidden_network)
+    monkeypatch.setattr(urllib.request, "urlopen", forbidden_network)
+    document = extract_xlsx(
+        path,
+        preflight_xlsx(path),
+        artifact_dir=tmp_path / "artifacts",
+    )
+
+    chart_slot = next(slot for slot in document.sheets[0].slots if isinstance(slot, XlsxChartSlot))
+    assert (
+        any(
+            isinstance(block, HeadingBlock) and block.inlines == (InlineText("Cached series"),)
+            for block in chart_slot.blocks
+        )
+        is False
+    )
+    rendered_facts = repr(chart_slot.blocks)
+    assert "Cached series" in rendered_facts
+    assert "[Book.xlsx]Quoted Sheet!$A$2:$A$3" in rendered_facts
+    assert "DynamicName" in rendered_facts
+    assert [warning.code for warning in document.warnings].count("xlsx_external_reference") == 2
+
+
+def test_multiple_chart_reference_warnings_stay_bound_to_their_occurrence(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "chart-warning-occurrences.xlsx"
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.title = "Data"
+    sheet.append(("Category", "Value"))
+    sheet.append(("A", 1))
+    chart = BarChart()
+    chart.add_data(Reference(sheet, min_col=2, min_row=1, max_row=2), titles_from_data=True)
+    chart.set_categories(Reference(sheet, min_col=1, min_row=2, max_row=2))
+    sheet.add_chart(chart, "D2")
+    sheet.add_chart(deepcopy(chart), "D20")
+    workbook.save(path)
+    replacements: dict[str, bytes | None] = {}
+    with ZipFile(path) as archive:
+        for index, formula in ((1, b"DynamicOne"), (2, b"DynamicTwo")):
+            part = f"xl/charts/chart{index}.xml"
+            xml = archive.read(part)
+            original = b"<numRef><f>'Data'!$B$2</f></numRef>"
+            assert original in xml
+            replacements[part] = xml.replace(
+                original,
+                b"<numRef><f>" + formula + b"</f></numRef>",
+            )
+    rewrite_xlsx(path, replacements)
+
+    document = extract_xlsx(path, preflight_xlsx(path), artifact_dir=tmp_path / "artifacts")
+
+    warnings = [
+        warning for warning in document.warnings if warning.code == "xlsx_external_reference"
+    ]
+    assert [warning.message for warning in warnings] == [
+        "Data!D2: chart reference was preserved without access: DynamicOne",
+        "Data!D20: chart reference was preserved without access: DynamicTwo",
+    ]
+
+
+def test_semantic_chart_previews_and_requests_are_occurrence_independent(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "duplicate-charts.xlsx"
+    workbook = Workbook()
+    first = workbook.active
+    first.title = "Data"
+    first.append(("X", "Y"))
+    first.append((1, 3))
+    first.append((2, 5))
+    chart = ScatterChart()
+    chart.title = "Relationship"
+    cast(Any, chart.x_axis).title = "X"
+    cast(Any, chart.y_axis).title = "Y"
+    chart.series.append(
+        Series(
+            Reference(first, min_col=2, min_row=2, max_row=3),
+            Reference(first, min_col=1, min_row=2, max_row=3),
+            title="points",
+        )
+    )
+    first.add_chart(chart, "D2")
+    second = workbook.create_sheet("Other")
+    second.add_chart(deepcopy(chart), "H8")
+    workbook.save(path)
+    with ZipFile(path) as archive:
+        second_drawing = archive.read("xl/drawings/drawing2.xml")
+    assert b'name="Chart 1"' in second_drawing
+    rewrite_xlsx(
+        path,
+        {
+            "xl/drawings/drawing2.xml": second_drawing.replace(
+                b'name="Chart 1"',
+                b'name="Different occurrence" descr="different alt"',
+            )
+        },
+    )
+    artifacts = tmp_path / "artifacts"
+
+    document = extract_xlsx(path, preflight_xlsx(path), artifact_dir=artifacts)
+    chart_slots = tuple(
+        slot for sheet in document.sheets for slot in sheet.slots if isinstance(slot, XlsxChartSlot)
+    )
+    requests = build_xlsx_visual_requests(document, artifacts)
+
+    assert [(slot.anchor, slot.content_sha256) for slot in chart_slots] == [
+        ("D2", chart_slots[0].content_sha256),
+        ("H8", chart_slots[0].content_sha256),
+    ]
+    assert chart_slots[0].artifact_name == chart_slots[1].artifact_name
+    assert len(requests) == 1
+    assert requests[0].digest == chart_slots[0].content_sha256
+    assert requests[0].prompt == XLSX_CHART_VISION_PROMPT
+    assert "趋势" in requests[0].prompt
+    assert "关系" in requests[0].prompt
+    assert "标注" in requests[0].prompt
+    assert "含义" in requests[0].prompt
+    assert "视觉解释" in requests[0].prompt
+
+
+def test_without_artifact_directory_native_chart_text_survives_and_images_are_warned(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "native-only.xlsx"
+    source_image = tmp_path / "source.png"
+    _write_png(source_image)
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.append(("Name", "Value"))
+    sheet.append(("A", 1))
+    chart = PieChart()
+    chart.title = "Share"
+    chart.add_data(Reference(sheet, min_col=2, min_row=1, max_row=2), titles_from_data=True)
+    chart.set_categories(Reference(sheet, min_col=1, min_row=2, max_row=2))
+    sheet.add_chart(chart, "D2")
+    sheet.add_image(Image(source_image), "J2")
+    workbook.save(path)
+
+    document = extract_xlsx(path, preflight_xlsx(path))
+
+    assert not _visual_slots(document.sheets[0])
+    native_text = repr(_native_slots(document.sheets[0]))
+    assert "Share" in native_text
+    assert "Series" in native_text
+    assert "Image name:" in native_text
+    assert [warning.code for warning in document.warnings].count(
+        "xlsx_visual_artifact_unavailable"
+    ) == 2
+
+
+def test_image_visual_preparation_reuses_shared_safety_helper(tmp_path: Path) -> None:
+    artifact_dir = tmp_path / "artifacts"
+    output_dir = tmp_path / "prepared"
+    artifact_dir.mkdir()
+    output_dir.mkdir()
+    disguised = artifact_dir / "xlsx-media.png"
+    image = PILImage.new("RGB", (16, 16), "red")
+    try:
+        image.save(disguised, format="JPEG")
+    finally:
+        image.close()
+    slot = XlsxImageSlot(
+        source_index=1,
+        anchor="A1",
+        artifact_name=disguised.name,
+        content_sha256="a" * 64,
+    )
+
+    with pytest.raises(DocumentTypeMismatchError, match="extension declares png"):
+        prepare_xlsx_visual_artifact(slot, artifact_dir, output_dir, "prepared")
+
+
+def test_supported_chart_families_emit_native_type_facts(tmp_path: Path) -> None:
+    path = tmp_path / "chart-families.xlsx"
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.title = "Data"
+    sheet.append(("Category", "Value", "X", "Y"))
+    sheet.append(("A", 1, 1, 2))
+    sheet.append(("B", 2, 2, 4))
+    chart_types = (LineChart(), BarChart(), PieChart(), DoughnutChart())
+    for index, chart in enumerate(chart_types, start=1):
+        chart.title = type(chart).__name__
+        chart.add_data(Reference(sheet, min_col=2, min_row=1, max_row=3), titles_from_data=True)
+        chart.set_categories(Reference(sheet, min_col=1, min_row=2, max_row=3))
+        sheet.add_chart(chart, f"F{index * 8}")
+    scatter = ScatterChart()
+    scatter.title = "ScatterChart"
+    scatter.series.append(
+        Series(
+            Reference(sheet, min_col=4, min_row=2, max_row=3),
+            Reference(sheet, min_col=3, min_row=2, max_row=3),
+            title="points",
+        )
+    )
+    sheet.add_chart(scatter, "F40")
+    workbook.save(path)
+
+    document = extract_xlsx(
+        path,
+        preflight_xlsx(path),
+        artifact_dir=tmp_path / "artifacts",
+    )
+
+    chart_slots = [slot for slot in document.sheets[0].slots if isinstance(slot, XlsxChartSlot)]
+    assert len(chart_slots) == 5
+    assert [
+        next(
+            inline.text
+            for block in slot.blocks
+            if isinstance(block, ParagraphBlock)
+            for inline in block.inlines
+            if isinstance(inline, InlineText) and inline.text.startswith("Chart type:")
+        )
+        for slot in chart_slots
+    ] == [
+        "Chart type: line",
+        "Chart type: bar",
+        "Chart type: pie",
+        "Chart type: doughnut",
+        "Chart type: scatter",
+    ]
+
+
+def test_duplicate_embedded_media_share_raw_digest_and_one_request(tmp_path: Path) -> None:
+    path = tmp_path / "duplicate-images.xlsx"
+    source_image = tmp_path / "shared.png"
+    image_bytes = _write_png(source_image, color="green")
+    workbook = Workbook()
+    first = workbook.active
+    first.title = "First"
+    first.add_image(Image(source_image), "B2")
+    second = workbook.create_sheet("Second")
+    second.add_image(Image(source_image), "H9")
+    workbook.save(path)
+    artifacts = tmp_path / "artifacts"
+
+    document = extract_xlsx(path, preflight_xlsx(path), artifact_dir=artifacts)
+    image_slots = tuple(
+        slot for sheet in document.sheets for slot in sheet.slots if isinstance(slot, XlsxImageSlot)
+    )
+    requests = build_xlsx_visual_requests(document, artifacts)
+
+    assert [slot.anchor for slot in image_slots] == ["B2", "H9"]
+    assert image_slots[0].content_sha256 == image_slots[1].content_sha256
+    assert image_slots[0].artifact_name == image_slots[1].artifact_name
+    assert (artifacts / image_slots[0].artifact_name).read_bytes() == image_bytes
+    assert (
+        len([request for request in requests if request.digest == image_slots[0].content_sha256])
+        == 1
+    )
+
+
+def test_multilevel_category_cache_combines_levels_without_duplicate_index_failure(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "multilevel.xlsx"
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.title = "Data"
+    sheet.append(("Category", "Value"))
+    sheet.append(("Jan", 1))
+    sheet.append(("Feb", 2))
+    chart = LineChart()
+    chart.add_data(Reference(sheet, min_col=2, min_row=1, max_row=3), titles_from_data=True)
+    chart.set_categories(Reference(sheet, min_col=1, min_row=2, max_row=3))
+    sheet.add_chart(chart, "D2")
+    workbook.save(path)
+    with ZipFile(path) as archive:
+        chart_xml = archive.read("xl/charts/chart1.xml")
+    original = b"<numRef><f>'Data'!$A$2:$A$3</f></numRef>"
+    replacement = (
+        b"<multiLvlStrRef><f>'Data'!$A$2:$A$3</f><multiLvlStrCache>"
+        b'<ptCount val="2"/><lvl><pt idx="0"><v>Q1</v></pt>'
+        b'<pt idx="1"><v>Q1</v></pt></lvl><lvl>'
+        b'<pt idx="0"><v>Jan</v></pt><pt idx="1"><v>Feb</v></pt>'
+        b"</lvl></multiLvlStrCache></multiLvlStrRef>"
+    )
+    assert original in chart_xml
+    chart_xml = chart_xml.replace(original, replacement).replace(
+        b"<chart><plotArea>",
+        (b"<chart><title><tx><strRef><f>'Data'!$A$1</f></strRef></tx></title><plotArea>"),
+    )
+    rewrite_xlsx(path, {"xl/charts/chart1.xml": chart_xml})
+
+    document = extract_xlsx(
+        path,
+        preflight_xlsx(path),
+        artifact_dir=tmp_path / "artifacts",
+    )
+
+    slot = next(slot for slot in document.sheets[0].slots if isinstance(slot, XlsxChartSlot))
+    heading = next(block for block in slot.blocks if isinstance(block, HeadingBlock))
+    table = next(block for block in slot.blocks if isinstance(block, TableBlock))
+    assert heading.inlines == (InlineText("Category"),)
+    assert [row[3] for row in table.grid] == ["Q1 / Jan", "Q1 / Feb"]
+
+
+def test_unsupported_chart_type_is_skipped_with_locatable_warning(tmp_path: Path) -> None:
+    path = tmp_path / "unsupported-chart.xlsx"
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet["A1"] = "kept"
+    chart = LineChart()
+    chart.add_data(Reference(sheet, min_col=1, min_row=1, max_row=1))
+    sheet.add_chart(chart, "D2")
+    workbook.save(path)
+    with ZipFile(path) as archive:
+        chart_xml = archive.read("xl/charts/chart1.xml")
+    assert b"<lineChart>" in chart_xml
+    chart_xml = chart_xml.replace(b"<lineChart>", b"<areaChart>").replace(
+        b"</lineChart>", b"</areaChart>"
+    )
+    rewrite_xlsx(path, {"xl/charts/chart1.xml": chart_xml})
+
+    document = extract_xlsx(path, preflight_xlsx(path), artifact_dir=tmp_path / "artifacts")
+
+    assert not any(isinstance(slot, XlsxChartSlot) for slot in document.sheets[0].slots)
+    warning = next(
+        warning for warning in document.warnings if warning.code == "xlsx_unsupported_object"
+    )
+    assert warning.message.startswith("Sheet!D2:")
+
+
+@pytest.mark.parametrize(
+    ("field", "limit", "message"),
+    [
+        ("drawing_objects", media_module.MAX_DRAWING_OBJECTS, "drawing object"),
+        ("chart_cache_points", media_module.MAX_CHART_CACHE_POINTS, "chart cache point"),
+    ],
+)
+def test_visual_outer_limits_fail_before_semantic_preview(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    field: str,
+    limit: int,
+    message: str,
+) -> None:
+    path = tmp_path / "bounded-visual.xlsx"
+    workbook = Workbook()
+    workbook.active["A1"] = "kept"
+    workbook.save(path)
+    preflight = preflight_xlsx(path)
+    accepted = replace(
+        preflight,
+        usage=replace(preflight.usage, **{field: limit}),
+    )
+    bounded = replace(
+        preflight,
+        usage=replace(preflight.usage, **{field: limit + 1}),
+    )
+
+    def forbidden_preview(*args: object, **kwargs: object) -> bytes:
+        del args, kwargs
+        raise AssertionError("semantic preview must not run after an outer-limit failure")
+
+    monkeypatch.setattr(media_module, "render_chart_semantic_preview", forbidden_preview)
+    extract_xlsx(path, accepted, artifact_dir=tmp_path / "accepted-artifacts")
+    with pytest.raises(LimitExceededError, match=message):
+        extract_xlsx(path, bounded, artifact_dir=tmp_path / "artifacts")
+
+    assert not (tmp_path / "artifacts").exists()
+
+
 def test_extract_preserves_all_sheet_like_entries_states_and_empty_sheets(
     tmp_path: Path,
 ) -> None:
@@ -129,7 +656,7 @@ def test_extract_preserves_all_sheet_like_entries_states_and_empty_sheets(
         assert isinstance(prelude.blocks[2], ParagraphBlock)
     assert len(_native_slots(document.sheets[1])) == 1
     assert len(_native_slots(document.sheets[2])) == 1
-    assert len(_native_slots(document.sheets[3])) == 1
+    assert len(_native_slots(document.sheets[3])) == 2
 
 
 def test_extract_builds_tables_regions_merges_and_ignores_style_only_cells(

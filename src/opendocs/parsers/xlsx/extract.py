@@ -25,8 +25,11 @@ from opendocs._models import (
     WarningRecord,
 )
 from opendocs.errors import CorruptDocumentError, LimitExceededError
+from opendocs.parsers.xlsx.media import XlsxVisualOccurrence, read_xlsx_visual_objects
 from opendocs.parsers.xlsx.models import (
+    XlsxChartSlot,
     XlsxDocument,
+    XlsxImageSlot,
     XlsxNativeSlot,
     XlsxSheet,
     XlsxSheetKind,
@@ -639,21 +642,13 @@ def _sheet_prelude(sheet: XlsxPreflightSheet) -> XlsxNativeSlot:
 
 def _sheet_slots(
     worksheet: Any,
-    records: tuple[_CellRecord, ...],
     *,
-    epoch: datetime,
     sheet: XlsxPreflightSheet,
-    warnings: _WarningCollector,
     budget: _MaterializationBudget,
     text_objects: tuple[XlsxTextObject, ...],
+    texts: dict[_Coordinate, str],
+    semantic: set[_Coordinate],
 ) -> tuple[XlsxNativeSlot, ...]:
-    texts, semantic = _cell_texts(
-        worksheet,
-        records,
-        epoch=epoch,
-        sheet=sheet,
-        warnings=warnings,
-    )
     candidates: list[_SlotCandidate] = []
     for ordinal, spec in enumerate(_region_specs(worksheet, semantic), start=1):
         budget.consume(_area(spec.bounds))
@@ -744,11 +739,47 @@ def _non_worksheet_slots(
     return tuple(slots)
 
 
-def extract_xlsx(path: Path, preflight: XlsxPreflight) -> XlsxDocument:
+def _visual_slot(
+    occurrence: XlsxVisualOccurrence,
+    *,
+    source_index: int,
+) -> XlsxNativeSlot | XlsxImageSlot | XlsxChartSlot:
+    if occurrence.artifact_name is None or occurrence.content_sha256 is None:
+        return XlsxNativeSlot(source_index, occurrence.anchor, occurrence.blocks)
+    if occurrence.kind == "image":
+        return XlsxImageSlot(
+            source_index=source_index,
+            anchor=occurrence.anchor,
+            artifact_name=occurrence.artifact_name,
+            content_sha256=occurrence.content_sha256,
+            alt_text=occurrence.alt_text,
+            object_name=occurrence.object_name,
+            title=occurrence.title,
+        )
+    return XlsxChartSlot(
+        source_index=source_index,
+        anchor=occurrence.anchor,
+        artifact_name=occurrence.artifact_name,
+        content_sha256=occurrence.content_sha256,
+        blocks=occurrence.blocks,
+        alt_text=occurrence.alt_text,
+        object_name=occurrence.object_name,
+        title=occurrence.title,
+    )
+
+
+def extract_xlsx(
+    path: Path,
+    preflight: XlsxPreflight,
+    *,
+    artifact_dir: Path | None = None,
+) -> XlsxDocument:
     if not isinstance(path, Path):
         raise TypeError("path must be a Path")
     if not isinstance(preflight, XlsxPreflight):
         raise TypeError("preflight must be an XlsxPreflight")
+    if artifact_dir is not None and not isinstance(artifact_dir, Path):
+        raise TypeError("artifact_dir must be a Path or None")
     sidecars = _read_sidecars(path, preflight)
     text_objects = read_xlsx_text_objects(path, preflight)
     warnings = _WarningCollector()
@@ -772,6 +803,32 @@ def extract_xlsx(path: Path, preflight: XlsxPreflight) -> XlsxDocument:
     )
     try:
         worksheets = {worksheet.title: worksheet for worksheet in workbook.worksheets}
+        sheet_values: dict[int, tuple[dict[_Coordinate, str], set[_Coordinate]]] = {}
+        workbook_values: dict[str, dict[str, str]] = {}
+        for sheet in preflight.sheets:
+            if sheet.kind is XlsxSheetKind.CHARTSHEET:
+                workbook_values[sheet.name] = {}
+                continue
+            worksheet = worksheets.get(sheet.name)
+            if worksheet is None:
+                raise CorruptDocumentError("XLSX worksheet is missing after full-mode load")
+            texts, semantic = _cell_texts(
+                worksheet,
+                sidecars[sheet.sheet_index],
+                epoch=workbook.epoch,
+                sheet=sheet,
+                warnings=warnings,
+            )
+            sheet_values[sheet.sheet_index] = (texts, semantic)
+            workbook_values[sheet.name] = {
+                f"{get_column_letter(column)}{row}": text for (row, column), text in texts.items()
+            }
+        visual_objects = read_xlsx_visual_objects(
+            path,
+            preflight,
+            workbook_values,
+            artifact_dir=artifact_dir,
+        )
         sheets: list[XlsxSheet] = []
         budget = _MaterializationBudget()
         for sheet in preflight.sheets:
@@ -782,15 +839,24 @@ def extract_xlsx(path: Path, preflight: XlsxPreflight) -> XlsxDocument:
                 worksheet = worksheets.get(sheet.name)
                 if worksheet is None:
                     raise CorruptDocumentError("XLSX worksheet is missing after full-mode load")
+                texts, semantic = sheet_values[sheet.sheet_index]
                 slots = _sheet_slots(
                     worksheet,
-                    sidecars[sheet.sheet_index],
-                    epoch=workbook.epoch,
                     sheet=sheet,
-                    warnings=warnings,
                     budget=budget,
                     text_objects=sheet_text_objects,
+                    texts=texts,
+                    semantic=semantic,
                 )
+            slots = (
+                *slots,
+                *(
+                    _visual_slot(occurrence, source_index=len(slots) + offset)
+                    for offset, occurrence in enumerate(
+                        visual_objects.by_sheet[sheet.sheet_index - 1]
+                    )
+                ),
+            )
             sheets.append(
                 XlsxSheet(
                     sheet_index=sheet.sheet_index,
@@ -802,4 +868,5 @@ def extract_xlsx(path: Path, preflight: XlsxPreflight) -> XlsxDocument:
             )
     finally:
         workbook.close()
-    return XlsxDocument(sheets=tuple(sheets), warnings=warnings.freeze())
+    combined_warnings = (*warnings.freeze(), *visual_objects.warnings)
+    return XlsxDocument(sheets=tuple(sheets), warnings=combined_warnings)

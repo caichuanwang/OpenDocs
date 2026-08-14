@@ -54,6 +54,8 @@ def _document() -> XlsxDocument:
                         artifact_name="xlsx-image-1.png",
                         content_sha256="a" * 64,
                         alt_text="diagram",
+                        object_name="Picture 1",
+                        title="Architecture",
                     ),
                     XlsxChartSlot(
                         source_index=2,
@@ -61,6 +63,9 @@ def _document() -> XlsxDocument:
                         artifact_name="xlsx-chart-1.png",
                         content_sha256="b" * 64,
                         blocks=(TextBlock("Series: 1, 2, 3"),),
+                        alt_text="trend chart",
+                        object_name="Chart 1",
+                        title="Trend",
                     ),
                 ),
             ),

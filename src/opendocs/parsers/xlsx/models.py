@@ -204,6 +204,8 @@ class XlsxImageSlot:
     artifact_name: str
     content_sha256: str
     alt_text: str | None = None
+    object_name: str | None = None
+    title: str | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(
@@ -219,6 +221,12 @@ class XlsxImageSlot:
             _require_sha256("content_sha256", self.content_sha256),
         )
         object.__setattr__(self, "alt_text", _require_optional_string("alt_text", self.alt_text))
+        object.__setattr__(
+            self,
+            "object_name",
+            _require_optional_string("object_name", self.object_name),
+        )
+        object.__setattr__(self, "title", _require_optional_string("title", self.title))
 
 
 @dataclass(frozen=True, slots=True)
@@ -228,6 +236,9 @@ class XlsxChartSlot:
     artifact_name: str
     content_sha256: str
     blocks: tuple[Block, ...]
+    alt_text: str | None = None
+    object_name: str | None = None
+    title: str | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(
@@ -243,6 +254,13 @@ class XlsxChartSlot:
             _require_sha256("content_sha256", self.content_sha256),
         )
         object.__setattr__(self, "blocks", _require_blocks(self.blocks))
+        object.__setattr__(self, "alt_text", _require_optional_string("alt_text", self.alt_text))
+        object.__setattr__(
+            self,
+            "object_name",
+            _require_optional_string("object_name", self.object_name),
+        )
+        object.__setattr__(self, "title", _require_optional_string("title", self.title))
 
 
 XlsxSlot: TypeAlias = XlsxNativeSlot | XlsxImageSlot | XlsxChartSlot
@@ -387,6 +405,8 @@ def _slot_to_wire(slot: XlsxSlot) -> dict[str, object]:
             "artifact_name": slot.artifact_name,
             "content_sha256": slot.content_sha256,
             "alt_text": slot.alt_text,
+            "object_name": slot.object_name,
+            "title": slot.title,
         }
     return {
         "type": "xlsx_chart_slot",
@@ -394,6 +414,9 @@ def _slot_to_wire(slot: XlsxSlot) -> dict[str, object]:
         "artifact_name": slot.artifact_name,
         "content_sha256": slot.content_sha256,
         "blocks": tuple(_value_to_wire(block) for block in slot.blocks),
+        "alt_text": slot.alt_text,
+        "object_name": slot.object_name,
+        "title": slot.title,
     }
 
 
@@ -421,6 +444,8 @@ def _slot_from_wire(value: object) -> XlsxSlot:
             "artifact_name",
             "content_sha256",
             "alt_text",
+            "object_name",
+            "title",
         }:
             raise ValueError("XLSX image slot wire is invalid")
         return XlsxImageSlot(
@@ -429,6 +454,8 @@ def _slot_from_wire(value: object) -> XlsxSlot:
             artifact_name=_require_basename("artifact_name", payload["artifact_name"]),
             content_sha256=_require_sha256("content_sha256", payload["content_sha256"]),
             alt_text=_require_optional_string("alt_text", payload["alt_text"]),
+            object_name=_require_optional_string("object_name", payload["object_name"]),
+            title=_require_optional_string("title", payload["title"]),
         )
     if kind == "xlsx_chart_slot":
         if set(payload) != {
@@ -438,6 +465,9 @@ def _slot_from_wire(value: object) -> XlsxSlot:
             "artifact_name",
             "content_sha256",
             "blocks",
+            "alt_text",
+            "object_name",
+            "title",
         }:
             raise ValueError("XLSX chart slot wire is invalid")
         blocks_value = payload["blocks"]
@@ -449,6 +479,9 @@ def _slot_from_wire(value: object) -> XlsxSlot:
             artifact_name=_require_basename("artifact_name", payload["artifact_name"]),
             content_sha256=_require_sha256("content_sha256", payload["content_sha256"]),
             blocks=tuple(cast(Block, _value_from_wire(block)) for block in blocks_value),
+            alt_text=_require_optional_string("alt_text", payload["alt_text"]),
+            object_name=_require_optional_string("object_name", payload["object_name"]),
+            title=_require_optional_string("title", payload["title"]),
         )
     raise ValueError("XLSX slot type is invalid")
 
@@ -484,8 +517,12 @@ def _wire_estimate(document: XlsxDocument) -> int:
                 estimate += sum(_primitive_wire_estimate(block) for block in slot.blocks)
             if isinstance(slot, XlsxImageSlot | XlsxChartSlot):
                 estimate += 512 + len(slot.artifact_name) * 4 + len(slot.content_sha256) * 4
-            if isinstance(slot, XlsxImageSlot) and slot.alt_text is not None:
-                estimate += len(slot.alt_text) * 4
+            if isinstance(slot, XlsxImageSlot | XlsxChartSlot):
+                estimate += sum(
+                    len(value) * 4
+                    for value in (slot.alt_text, slot.object_name, slot.title)
+                    if value is not None
+                )
     estimate += sum(_primitive_wire_estimate(warning) for warning in document.warnings)
     return estimate
 
