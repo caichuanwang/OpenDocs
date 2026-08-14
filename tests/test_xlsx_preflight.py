@@ -8,12 +8,14 @@ from openpyxl import Workbook
 from openpyxl.chart import BarChart, Reference
 
 import opendocs.parsers.xlsx.preflight as preflight_module
-from opendocs.errors import CorruptDocumentError, LimitExceededError, UnsupportedDocumentError
+from opendocs._models import HeadingBlock, InlineText
+from opendocs._runtime import ParserRuntime
+from opendocs.errors import CorruptDocumentError, LimitExceededError
 from opendocs.options import ParseOptions
 from opendocs.parsers.xlsx import XlsxParser
 from opendocs.parsers.xlsx.models import XlsxSheetKind, XlsxSheetState
 from opendocs.parsers.xlsx.preflight import MAX_SHEETS, preflight_xlsx
-from opendocs.source import ResolvedSource
+from opendocs.source import ParseWorkspace, ResolvedSource
 from tests.xlsx_fixtures import rewrite_xlsx, write_structured_xlsx
 
 SHEET_NS = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
@@ -129,16 +131,13 @@ def test_sparse_full_grid_dimension_fails_before_any_loader(tmp_path: Path) -> N
 async def test_parser_seam_preflights_limits_and_does_not_map_max_pages_to_sheets(
     tmp_path: Path,
 ) -> None:
-    parser = XlsxParser()
     accepted = tmp_path / "two-sheets.xlsx"
     rejected = tmp_path / "too-many-sheets.xlsx"
-    write_structured_xlsx(
-        accepted,
-        sheets=(
-            ("One", "worksheet", "visible", None, ()),
-            ("Two", "worksheet", "visible", None, ()),
-        ),
-    )
+    workbook = Workbook()
+    workbook.active.title = "One"
+    workbook.create_sheet("Two")
+    workbook.save(accepted)
+    workbook.close()
     write_structured_xlsx(
         rejected,
         sheets=tuple(
@@ -146,16 +145,26 @@ async def test_parser_seam_preflights_limits_and_does_not_map_max_pages_to_sheet
         ),
     )
 
-    with pytest.raises(UnsupportedDocumentError, match="content parsing"):
-        await parser.parse(
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    runtime = ParserRuntime(ParseWorkspace(workspace))
+    parser = XlsxParser(runtime, None, None)
+    try:
+        result = await parser.parse(
             ResolvedSource(accepted, "two-sheets.xlsx", False),
             options=ParseOptions(max_pages=1),
         )
-    with pytest.raises(LimitExceededError, match="sheet count"):
-        await parser.parse(
-            ResolvedSource(rejected, "too-many-sheets.xlsx", False),
-            options=ParseOptions(max_pages=1),
-        )
+        assert [block for block in result.blocks if isinstance(block, HeadingBlock)] == [
+            HeadingBlock(1, (InlineText("One (Visible)"),)),
+            HeadingBlock(1, (InlineText("Two (Visible)"),)),
+        ]
+        with pytest.raises(LimitExceededError, match="sheet count"):
+            await parser.parse(
+                ResolvedSource(rejected, "too-many-sheets.xlsx", False),
+                options=ParseOptions(max_pages=1),
+            )
+    finally:
+        await runtime.aclose()
 
 
 @pytest.mark.parametrize(

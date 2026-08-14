@@ -84,5 +84,8 @@ def build_default_registry(
         DocumentType.PPTX,
         OfficeParser(DocumentType.PPTX, runtime, vision, vision_config, deadline=deadline),
     )
-    registry.register(DocumentType.XLSX, XlsxParser())
+    registry.register(
+        DocumentType.XLSX,
+        XlsxParser(runtime, vision, vision_config, deadline=deadline),
+    )
     return registry
