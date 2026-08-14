@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import tarfile
+import tomllib
 from dataclasses import dataclass
 from email.message import Message
 from email.parser import BytesParser
@@ -11,7 +12,9 @@ from pathlib import Path, PurePosixPath
 from zipfile import ZipFile
 
 EXPECTED_DEPENDENCIES = {
+    "defusedxml<1,>=0.7.1",
     "litellm<2,>=1.93",
+    "openpyxl<3.2,>=3.1.5",
     "pdfplumber<0.12,>=0.11.10",
     "pillow<13,>=12.3",
     "python-docx<2,>=1.1.2",
@@ -140,6 +143,9 @@ def _inspect_wheel(path: Path, expected_version: str) -> Message:
             raise ArtifactError("wheel contains an unexpected top-level package")
         required = {
             "opendocs/__init__.py",
+            "opendocs/parsers/xlsx/__init__.py",
+            "opendocs/parsers/xlsx/parser.py",
+            "opendocs/parsers/xlsx/preflight.py",
             "opendocs/py.typed",
             f"{dist_info}/WHEEL",
             f"{dist_info}/RECORD",
@@ -168,6 +174,9 @@ def _inspect_sdist(path: Path, expected_version: str) -> Message:
             f"{expected_root}/README.md",
             f"{expected_root}/pyproject.toml",
             f"{expected_root}/src/opendocs/__init__.py",
+            f"{expected_root}/src/opendocs/parsers/xlsx/__init__.py",
+            f"{expected_root}/src/opendocs/parsers/xlsx/parser.py",
+            f"{expected_root}/src/opendocs/parsers/xlsx/preflight.py",
             f"{expected_root}/src/opendocs/py.typed",
             f"{expected_root}/PKG-INFO",
         }
@@ -260,7 +269,7 @@ def _sha256(path: Path) -> str:
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Validate OpenDocs release distributions.")
     parser.add_argument("directory", type=Path)
-    parser.add_argument("--version", default="0.1.0")
+    parser.add_argument("--version")
     parser.add_argument(
         "--verify-checksums",
         action="store_true",
@@ -271,14 +280,22 @@ def _parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
+    expected_version = args.version or _project_version()
     result = inspect_release_artifacts(
         args.directory,
-        expected_version=args.version,
+        expected_version=expected_version,
         verify_existing_checksums=args.verify_checksums,
     )
     print(f"validated {result.wheel.name} and {result.sdist.name}")
     print(f"checksums: {result.checksums}")
     return 0
+
+
+def _project_version() -> str:
+    pyproject = Path(__file__).resolve().parents[1] / "pyproject.toml"
+    with pyproject.open("rb") as source:
+        payload = tomllib.load(source)
+    return str(payload["project"]["version"])
 
 
 if __name__ == "__main__":

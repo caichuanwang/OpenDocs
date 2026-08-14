@@ -40,6 +40,13 @@ def test_artifact_checker_requires_exact_wheel_and_sdist_with_matching_metadata(
     assert result.checksums.name == "SHA256SUMS"
     verify_checksums(release_dist, result.checksums)
 
+    with ZipFile(result.wheel) as archive:
+        assert {
+            "opendocs/parsers/xlsx/__init__.py",
+            "opendocs/parsers/xlsx/parser.py",
+            "opendocs/parsers/xlsx/preflight.py",
+        } <= set(archive.namelist())
+
 
 def test_artifact_checker_rejects_missing_or_duplicate_distributions(
     release_dist: Path,
@@ -109,4 +116,5 @@ def test_release_smoke_covers_native_formats_without_model_configuration(
         "pdf": True,
         "pptx": True,
         "text": True,
+        "xlsx": True,
     }

@@ -72,7 +72,7 @@ def test_distribution_declares_the_accepted_alpha_metadata() -> None:
     assert not any(classifier.startswith("Development Status :: 5") for classifier in classifiers)
 
 
-def test_distribution_declares_locked_m1_runtime_dependency_ranges() -> None:
+def test_distribution_declares_locked_runtime_dependency_ranges() -> None:
     requirements = {
         requirement.name.lower(): requirement
         for value in metadata("opendocs-sdk").get_all("Requires-Dist") or ()
@@ -84,6 +84,8 @@ def test_distribution_declares_locked_m1_runtime_dependency_ranges() -> None:
     assert requirements["litellm"].specifier == SpecifierSet(">=1.93,<2")
     assert requirements["python-docx"].specifier == SpecifierSet(">=1.1.2,<2")
     assert requirements["python-pptx"].specifier == SpecifierSet(">=1.0.2,<2")
+    assert requirements["openpyxl"].specifier == SpecifierSet(">=3.1.5,<3.2")
+    assert requirements["defusedxml"].specifier == SpecifierSet(">=0.7.1,<1")
 
 
 def test_public_parse_contracts_stay_compatible_for_the_alpha_line() -> None:
@@ -123,7 +125,7 @@ def test_public_options_keep_the_accepted_defaults_and_no_global_caps() -> None:
     assert forbidden_fields.isdisjoint(field.name for field in fields(opendocs.VisionConfig))
 
 
-def test_built_wheel_imports_office_dependencies_from_an_isolated_path(
+def test_built_wheel_installs_xlsx_dependencies_and_parser_in_an_isolated_environment(
     tmp_path: Path,
 ) -> None:
     uv_executable = shutil.which("uv")
@@ -134,21 +136,35 @@ def test_built_wheel_imports_office_dependencies_from_an_isolated_path(
         cwd=Path(__file__).resolve().parents[1],
     )
     wheel_path = next((tmp_path / "dist").glob("opendocs_sdk-*.whl"))
-    env = os.environ | {"PYTHONPATH": str(wheel_path), "PYTHONNOUSERSITE": "1"}
+    environment = tmp_path / "isolated"
+    subprocess.run(
+        [uv_executable, "venv", "--python", sys.executable, str(environment)],
+        check=True,
+        cwd=tmp_path,
+    )
+    python = environment / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
+    subprocess.run(
+        [uv_executable, "pip", "install", "--python", str(python), str(wheel_path)],
+        check=True,
+        cwd=tmp_path,
+    )
     completed = subprocess.run(
         [
-            sys.executable,
+            str(python),
             "-c",
             (
-                "import json; import docx; import opendocs; import pptx; "
+                "import json; import defusedxml; import docx; import opendocs; import openpyxl; "
+                "import opendocs.parsers.xlsx as xlsx; import pptx; "
                 "print(json.dumps({'opendocs_file': opendocs.__file__, "
-                "'version': opendocs.__version__, 'docx': docx.__name__, 'pptx': pptx.__name__}))"
+                "'version': opendocs.__version__, 'defusedxml_file': defusedxml.__file__, "
+                "'docx': docx.__name__, 'openpyxl_file': openpyxl.__file__, "
+                "'pptx': pptx.__name__, 'xlsx_file': xlsx.__file__}))"
             ),
         ],
         check=True,
         capture_output=True,
         cwd=tmp_path,
-        env=env,
+        env=os.environ | {"PYTHONNOUSERSITE": "1"},
         text=True,
     )
 
@@ -156,4 +172,7 @@ def test_built_wheel_imports_office_dependencies_from_an_isolated_path(
     assert payload["version"] == opendocs.__version__
     assert payload["docx"] == "docx"
     assert payload["pptx"] == "pptx"
-    assert ".whl/" in payload["opendocs_file"]
+    assert str(environment) in payload["opendocs_file"]
+    assert str(environment) in payload["xlsx_file"]
+    assert str(environment) in payload["openpyxl_file"]
+    assert str(environment) in payload["defusedxml_file"]

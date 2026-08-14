@@ -6,7 +6,7 @@
 [![Downloads](https://img.shields.io/pypi/dm/opendocs-sdk.svg)](https://pypistats.org/packages/opendocs-sdk)
 
 OpenDocs is a Python SDK that converts local documents into clean Markdown —
-TXT, Markdown, images, PDF (native / hybrid / vision), DOCX, and PPTX — through a unified
+TXT, Markdown, images, PDF (native / hybrid / vision), DOCX, PPTX, and XLSX — through a unified
 sync/async API.
 
 > **Package name**: `opendocs-sdk` &nbsp;|&nbsp; **Import name**: `opendocs` &nbsp;|&nbsp; **Python**: 3.11+
@@ -69,6 +69,10 @@ downloaded before calling OpenDocs.
 | PNG / JPEG / WebP | ✅ | Static images only; sanitized before the configured vision model sees them |
 | DOCX | ✅ | Continuous authored body flow with structured text, lists, links, tables, explicit breaks, and inline images |
 | PPTX | ✅ | Slide and shape-tree order with text, tables, accessible charts, groups, and inline images |
+| XLSX (`.xlsx`) | ✅ | All sheet-like entries in source order, saved values, tables/regions, merges, standard text objects, native chart facts, and optional visual interpretation |
+
+Only standard `.xlsx` workbooks are supported. Legacy `.xls`, macro-enabled `.xlsm`, binary
+`.xlsb`, and other spreadsheet formats are not accepted.
 
 ## Vision parsing
 
@@ -87,8 +91,9 @@ apt-get install poppler-utils
 ```
 
 Standalone images require `VisionConfig`. PDFs and Office documents without vision configuration
-preserve usable native content and emit deterministic warnings for visual regions; a document with
-no usable native content raises `VisionRequiredError`.
+preserve usable native content and emit deterministic warnings for visual regions; XLSX always
+keeps its native sheet and chart facts when visual enrichment is unavailable. A document with no
+usable native content raises `VisionRequiredError` where that format requires vision.
 
 ```python
 from opendocs import ParseOptions, VisionConfig, parse
@@ -111,7 +116,7 @@ response — use distinct typed exceptions for precise error handling.
 cross-document concurrency themselves (e.g. with an `asyncio.Semaphore`); see the
 [independent consumer example](examples/basic_consumer/README.md).
 
-### DOCX & PPTX details
+### DOCX, PPTX & XLSX details
 
 DOCX extraction preserves authored body paragraphs, headings, lists, safe links, tables, merged
 cells, explicit page breaks, and inline raster-image positions. A DOCX remains one continuous
@@ -121,6 +126,20 @@ PPTX extraction emits every slide boundary and traverses each slide's shape tree
 including recursive groups, text, tables, accessible chart data, and raster pictures. Exact
 duplicate embedded images are analyzed once per parse and replayed at every authored slot.
 
+XLSX extraction emits every worksheet and chartsheet in workbook order, including visible, hidden,
+very hidden, and empty sheets. It preserves non-empty regions, Excel tables, merged-cell spans,
+standard comments/text boxes/links/header-footer text, and common saved display semantics such as
+`$`, `€`, `£`, and `¥` currency, grouping, decimals, percentages, dates, and times. Saved formula
+caches are preferred; when a cache is missing, the formula text is returned with a warning. OpenDocs
+does not recalculate formulas or fetch linked workbooks, data connections, or URLs—the reference is
+preserved as text only.
+
+Chart titles, labels, series, categories, and accessible values come from native workbook data.
+When vision is configured, normalized chart fact cards and embedded images may add trend, label,
+relationship, or meaning interpretation. This enrichment is fail-open and never replaces native
+facts. XLSX output does not promise Excel pixel appearance, fonts, colors, borders, dimensions, or
+other visual styling fidelity.
+
 ### How OpenDocs compares
 
 | Feature | OpenDocs | marker | docling | unstructured | pypdf |
@@ -128,6 +147,7 @@ duplicate embedded images are analyzed once per parse and replayed at every auth
 | PDF → Markdown | ✅ | ✅ | ✅ | ✅ | ❌ |
 | DOCX → Markdown | ✅ | ❌ | ✅ | ✅ | N/A |
 | PPTX → Markdown | ✅ | ❌ | ✅ | ✅ | N/A |
+| XLSX → Markdown | ✅ | ❌ | ✅ | ✅ | N/A |
 | LLM vision integration | ✅ | ❌ | ❌ | ❌ | ❌ |
 | Sync + Async API | ✅ | ❌ | ❌ | ❌ | ❌ |
 | No external service required | ✅ | ✅ | ✅ | ⚠️ | ✅ |
