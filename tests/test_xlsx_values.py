@@ -26,6 +26,11 @@ from opendocs.parsers.xlsx.values import format_saved_value
             '_(€* #,##0.00_);_(€* (#,##0.00);_(€* "-"??_);_(@_)',
             "(€1,234.50)",
         ),
+        (
+            Decimal("0"),
+            '_(€* #,##0.00_);_(€* (#,##0.00);_(€* "-"??_);_(@_)',
+            "€-",
+        ),
     ],
 )
 def test_format_saved_value_supports_core_and_accounting_formats(

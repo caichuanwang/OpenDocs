@@ -191,10 +191,11 @@ def _format_number(value: Decimal, number_format: str) -> str | None:
     sections = _split_sections(number_format)
     section, negative = _selected_numeric_section(sections, value)
     pattern = _clean_section(section)
-    if not any(character in "0#?" for character in pattern):
-        if value == 0 and "-" in pattern:
-            symbol = next((item for item in pattern if item in _CURRENCY_SYMBOLS), "")
+    if value == 0 and "-" in pattern:
+        symbol = next((item for item in _CURRENCY_SYMBOLS if item in pattern), "")
+        if symbol:
             return f"{symbol}-"
+    if not any(character in "0#?" for character in pattern):
         return None
 
     percent_count = pattern.count("%")
