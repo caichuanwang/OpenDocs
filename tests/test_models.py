@@ -35,6 +35,7 @@ def test_document_type_exposes_stable_values() -> None:
     assert DocumentType.IMAGE == "image"
     assert DocumentType.DOCX == "docx"
     assert DocumentType.PPTX == "pptx"
+    assert DocumentType.XLSX == "xlsx"
 
 
 def test_parsed_document_preserves_block_order_and_tuple_storage() -> None:

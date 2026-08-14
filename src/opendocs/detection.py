@@ -10,6 +10,7 @@ from opendocs.errors import (
     DocumentTypeMismatchError,
     UnsupportedDocumentError,
 )
+from opendocs.parsers.office.package import validate_office_package
 from opendocs.source import ResolvedSource
 
 _SUFFIX_TYPES = {
@@ -23,6 +24,7 @@ _SUFFIX_TYPES = {
     ".webp": DocumentType.IMAGE,
     ".docx": DocumentType.DOCX,
     ".pptx": DocumentType.PPTX,
+    ".xlsx": DocumentType.XLSX,
 }
 _ZIP_PREFIXES = (b"PK\x03\x04", b"PK\x05\x06", b"PK\x07\x08")
 _UTF8_CHUNK_SIZE = 4096
@@ -43,17 +45,26 @@ def _signature_type(signature: bytes) -> DocumentType | None:
 def _container_type(path: Path) -> DocumentType:
     try:
         with ZipFile(path) as archive:
+            found_docx = False
             found_pptx = False
+            found_xlsx = False
             for info in archive.infolist():
                 if info.filename == "word/document.xml":
-                    return DocumentType.DOCX
-                if info.filename == "ppt/presentation.xml":
+                    found_docx = True
+                elif info.filename == "ppt/presentation.xml":
                     found_pptx = True
+                elif info.filename == "xl/workbook.xml":
+                    found_xlsx = True
     except BadZipFile as error:
         raise CorruptDocumentError("ZIP-based document is corrupt") from error
 
+    if found_docx:
+        return DocumentType.DOCX
     if found_pptx:
         return DocumentType.PPTX
+    if found_xlsx:
+        validate_office_package(path, document_type=DocumentType.XLSX)
+        return DocumentType.XLSX
     raise UnsupportedDocumentError("ZIP container is neither DOCX nor PPTX")
 
 
@@ -81,11 +92,17 @@ def detect_document_type(source: ResolvedSource) -> DocumentType:
     if suffix and suffix not in _SUFFIX_TYPES:
         raise UnsupportedDocumentError(f"unsupported document extension: {suffix}")
 
+    declared = _SUFFIX_TYPES.get(suffix)
     detected = _signature_type(signature)
     if detected is None and signature.startswith(_ZIP_PREFIXES):
-        detected = _container_type(source.path)
+        try:
+            detected = _container_type(source.path)
+        except UnsupportedDocumentError:
+            if declared is not DocumentType.XLSX:
+                raise
+            validate_office_package(source.path, document_type=DocumentType.XLSX)
+            detected = DocumentType.XLSX
 
-    declared = _SUFFIX_TYPES.get(suffix)
     if declared is DocumentType.TEXT or declared is DocumentType.MARKDOWN:
         if detected is not None:
             raise _mismatch(suffix, detected)

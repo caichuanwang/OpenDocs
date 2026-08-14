@@ -65,6 +65,7 @@ class DocumentType(StrEnum):
     IMAGE = "image"
     DOCX = "docx"
     PPTX = "pptx"
+    XLSX = "xlsx"
 
 
 class ListKind(StrEnum):

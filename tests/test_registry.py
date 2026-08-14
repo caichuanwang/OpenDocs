@@ -1,14 +1,19 @@
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any, cast
 
-from opendocs import ParseOptions, UnsupportedDocumentError
+import pytest
+
+from opendocs import CorruptDocumentError, ParseOptions, UnsupportedDocumentError
 from opendocs._models import DocumentType, ParsedDocument, TextBlock
 from opendocs._runtime import ParserRuntime
 from opendocs.parsers.base import DocumentParser
 from opendocs.parsers.office.parser import OfficeParser
 from opendocs.parsers.registry import ParserRegistry, build_default_registry
+from opendocs.parsers.xlsx import XlsxParser
 from opendocs.source import ParseWorkspace, ResolvedSource
+from tests.xlsx_fixtures import write_xlsx
 
 
 class StubParser:
@@ -146,7 +151,41 @@ def test_injected_default_registry_registers_all_core_types(tmp_path) -> None:
         assert registry.get(DocumentType.PDF)
         assert isinstance(registry.get(DocumentType.DOCX), OfficeParser)
         assert isinstance(registry.get(DocumentType.PPTX), OfficeParser)
+        assert isinstance(registry.get(DocumentType.XLSX), XlsxParser)
     finally:
         import asyncio
 
         asyncio.run(runtime.aclose())
+
+
+def test_default_registry_without_runtime_keeps_binary_formats_unavailable() -> None:
+    registry = build_default_registry()
+
+    for document_type in (
+        DocumentType.IMAGE,
+        DocumentType.PDF,
+        DocumentType.DOCX,
+        DocumentType.PPTX,
+        DocumentType.XLSX,
+    ):
+        with pytest.raises(UnsupportedDocumentError, match=document_type.value):
+            registry.get(document_type)
+
+
+@pytest.mark.asyncio
+async def test_xlsx_parser_seam_is_callable_and_prevalidates_the_package(tmp_path) -> None:
+    parser = XlsxParser()
+    valid = tmp_path / "valid.xlsx"
+    write_xlsx(valid)
+
+    with pytest.raises(UnsupportedDocumentError, match="XLSX content parsing"):
+        await parser.parse(_resolved(valid), options=ParseOptions())
+
+    corrupt = tmp_path / "corrupt.xlsx"
+    corrupt.write_bytes(b"not-a-zip")
+    with pytest.raises(CorruptDocumentError):
+        await parser.parse(_resolved(corrupt), options=ParseOptions())
+
+
+def _resolved(path: Path) -> ResolvedSource:
+    return ResolvedSource(path=path, original_name="workbook.xlsx", owned=False)

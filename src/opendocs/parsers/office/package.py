@@ -9,6 +9,9 @@ from pathlib import Path, PurePosixPath
 from typing import TypeVar
 from zipfile import BadZipFile, ZipFile, ZipInfo
 
+from defusedxml import ElementTree as DefusedET
+from defusedxml.common import DefusedXmlException
+
 from opendocs._models import DocumentType
 from opendocs.errors import CorruptDocumentError, LimitExceededError
 from opendocs.source import ParseWorkspace
@@ -23,9 +26,18 @@ MAX_COMPRESSION_RATIO = 100
 
 _REL_NS = "{http://schemas.openxmlformats.org/package/2006/relationships}"
 _RELATIONSHIP_TAG = f"{_REL_NS}Relationship"
+_CONTENT_TYPES_NS = "{http://schemas.openxmlformats.org/package/2006/content-types}"
+_CONTENT_TYPE_OVERRIDE_TAG = f"{_CONTENT_TYPES_NS}Override"
+_OFFICE_DOCUMENT_RELATIONSHIP = (
+    "http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument"
+)
+_XLSX_WORKBOOK_CONTENT_TYPE = (
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"
+)
 _REQUIRED_PARTS = {
     DocumentType.DOCX: "word/document.xml",
     DocumentType.PPTX: "ppt/presentation.xml",
+    DocumentType.XLSX: "xl/workbook.xml",
 }
 _MEDIA_SEGMENT = "media"
 _BINARY_SUFFIXES = {
@@ -123,15 +135,32 @@ def _normalize_target(base_dir: str, target: str) -> str:
     return joined
 
 
+def _parse_package_xml(data: bytes, *, message: str) -> ET.Element:
+    try:
+        return DefusedET.fromstring(
+            data,
+            forbid_dtd=True,
+            forbid_entities=True,
+            forbid_external=True,
+        )
+    except (DefusedXmlException, ET.ParseError) as error:
+        raise CorruptDocumentError(message) from error
+
+
+def _read_relationships(archive: ZipFile, rels_name: str) -> ET.Element:
+    try:
+        data = archive.read(rels_name)
+    except (KeyError, OSError) as error:
+        raise CorruptDocumentError("Office package relationships are corrupt") from error
+    return _parse_package_xml(data, message="Office package relationships are corrupt")
+
+
 def _parse_relationship_targets(
     archive: ZipFile,
     infos_by_name: dict[str, ZipInfo],
     rels_name: str,
 ) -> None:
-    try:
-        root = ET.fromstring(archive.read(rels_name))
-    except (KeyError, OSError, ET.ParseError) as error:
-        raise CorruptDocumentError("Office package relationships are corrupt") from error
+    root = _read_relationships(archive, rels_name)
     base_dir = _rels_source_base(rels_name)
     for node in root.iter(_RELATIONSHIP_TAG):
         target = node.get("Target")
@@ -152,23 +181,37 @@ def _required_root_target(
     if "_rels/.rels" not in infos_by_name:
         raise CorruptDocumentError("Office package root relationships are missing")
     required = _REQUIRED_PARTS[document_type]
-    try:
-        root = ET.fromstring(archive.read("_rels/.rels"))
-    except (OSError, ET.ParseError) as error:
-        raise CorruptDocumentError("Office package relationships are corrupt") from error
+    root = _read_relationships(archive, "_rels/.rels")
     for node in root.iter(_RELATIONSHIP_TAG):
         target = node.get("Target")
         if target is None or node.get("TargetMode") == "External":
+            continue
+        if document_type is DocumentType.XLSX and node.get("Type") != _OFFICE_DOCUMENT_RELATIONSHIP:
             continue
         if _normalize_target("", target) == required:
             return
     raise CorruptDocumentError("Office package required root relationship is missing")
 
 
+def _required_xlsx_content_type(archive: ZipFile) -> None:
+    try:
+        data = archive.read("[Content_Types].xml")
+    except (KeyError, OSError) as error:
+        raise CorruptDocumentError("Office package content types part is corrupt") from error
+    root = _parse_package_xml(data, message="Office package content types part is corrupt")
+    for node in root.iter(_CONTENT_TYPE_OVERRIDE_TAG):
+        if (
+            node.get("PartName") == "/xl/workbook.xml"
+            and node.get("ContentType") == _XLSX_WORKBOOK_CONTENT_TYPE
+        ):
+            return
+    raise CorruptDocumentError("Office package required main part content type is missing")
+
+
 def validate_office_package(path: Path, *, document_type: DocumentType) -> OfficePackageLayout:
     required_main_part = _REQUIRED_PARTS.get(document_type)
     if required_main_part is None:
-        raise ValueError("document_type must be DOCX or PPTX")
+        raise ValueError("document_type must be DOCX, PPTX, or XLSX")
     try:
         with ZipFile(path) as archive:
             infos = archive.infolist()
@@ -210,6 +253,8 @@ def validate_office_package(path: Path, *, document_type: DocumentType) -> Offic
                 raise CorruptDocumentError("Office package content types part is missing")
             if required_main_part not in infos_by_name:
                 raise CorruptDocumentError("Office package required main part is missing")
+            if document_type is DocumentType.XLSX:
+                _required_xlsx_content_type(archive)
             _required_root_target(archive, infos_by_name, document_type)
             for rels_name in tuple(name for name in infos_by_name if name.endswith(".rels")):
                 _parse_relationship_targets(archive, infos_by_name, rels_name)

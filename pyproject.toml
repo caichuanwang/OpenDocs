@@ -43,7 +43,9 @@ classifiers = [
   "Topic :: Scientific/Engineering :: Artificial Intelligence",
 ]
 dependencies = [
+  "defusedxml>=0.7.1,<1",
   "litellm>=1.93,<2",
+  "openpyxl>=3.1.5,<3.2",
   "pdfplumber>=0.11.10,<0.12",
   "pillow>=12.3,<13",
   "python-docx>=1.1.2,<2",
