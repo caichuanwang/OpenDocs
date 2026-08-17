@@ -21,6 +21,7 @@ from tests.native_worker_helpers import (
     dependency_versions,
     echo,
     make_bytes,
+    make_xlsx_wire,
     noisy_echo,
     raise_corrupt,
     raise_limit,
@@ -210,6 +211,16 @@ async def test_oversized_child_result_maps_to_runtime_dependency_error() -> None
     try:
         with pytest.raises(RuntimeDependencyError, match="inline values exceed"):
             await worker.run(make_bytes, MAX_INLINE_BYTES + 1)
+    finally:
+        await worker.aclose()
+
+
+@pytest.mark.asyncio
+async def test_xlsx_wire_budget_maps_to_limit_before_protocol_failure() -> None:
+    worker = NativeWorker()
+    try:
+        with pytest.raises(LimitExceededError, match="inline result budget"):
+            await worker.run(make_xlsx_wire, 8_000)
     finally:
         await worker.aclose()
 

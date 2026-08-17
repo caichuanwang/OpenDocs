@@ -92,7 +92,8 @@ def test_release_workflow_is_tag_only_and_validates_source_identity() -> None:
     assert "workflow_dispatch" not in trigger
     assert 'git merge-base --is-ancestor "$GITHUB_SHA" origin/master' in source
     assert 'test "$GITHUB_REF_NAME" = "v$package_version"' in source
-    assert "docs/releases/v0.1.0-evidence.md" in source
+    assert 'evidence="docs/releases/v${package_version}-evidence.md"' in source
+    assert 'test "$evidence" = "docs/releases/v0.1.0-evidence.md"' not in source
     assert source.count("uv build") == 1
 
 
@@ -111,17 +112,35 @@ def test_release_promotes_one_artifact_through_testpypi_pypi_and_release() -> No
     jobs = _jobs(RELEASE_PATH)
     source = RELEASE_PATH.read_text(encoding="utf-8")
 
-    assert source.count("name: release-dists") == 5
+    assert source.count("name: release-dists") == 6
     assert jobs["testpypi"]["environment"] == "testpypi"
     assert jobs["pypi"]["environment"] == "pypi"
     assert "https://test.pypi.org/legacy/" in source
     assert "--index-url https://test.pypi.org/simple/" in source
     assert 'pip" install "$testpypi_wheel"' in source
     assert "expected[wheel.name]" in source
-    assert "opendocs-sdk==0.1.0" in source
+    assert 'opendocs-sdk=="$package_version"' in source
+    assert "opendocs-sdk==0.1.0" not in source
+    assert jobs["testpypi"]["needs"] == ["build", "wheel-smoke"]
     assert jobs["pypi"]["needs"] == ["build", "testpypi"]
     assert jobs["public-smoke"]["needs"] == "pypi"
     assert jobs["github-release"]["needs"] == ["build", "public-smoke"]
+
+
+def test_release_has_python_311_to_313_isolated_wheel_smoke_without_expanding_ci() -> None:
+    jobs = _jobs(RELEASE_PATH)
+    wheel_smoke = jobs["wheel-smoke"]
+    strategy = cast(dict[str, object], wheel_smoke["strategy"])
+    matrix = cast(dict[str, list[str]], strategy["matrix"])
+    source = RELEASE_PATH.read_text(encoding="utf-8")
+
+    assert wheel_smoke["runs-on"] == "ubuntu-latest"
+    assert wheel_smoke["needs"] == "build"
+    assert matrix["python-version"] == ["3.11", "3.12", "3.13"]
+    assert 'pip" install "$wheel"' in source
+    assert '--version "$package_version" --verify-checksums' in source
+    assert "scripts/release_smoke.py" in source
+    assert _jobs(CI_PATH)["test"]["runs-on"] == "ubuntu-latest"
 
 
 def test_release_permissions_are_minimal_and_use_trusted_publishing() -> None:

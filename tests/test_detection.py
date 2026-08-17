@@ -1,4 +1,6 @@
+import io
 from pathlib import Path
+from typing import Any
 from zipfile import ZIP_DEFLATED, ZipFile
 
 import pytest
@@ -11,7 +13,8 @@ from opendocs import (
 )
 from opendocs._models import DocumentType
 from opendocs.detection import detect_document_type
-from opendocs.source import ResolvedSource
+from opendocs.source import ResolvedSource, Source, materialize_source
+from tests.xlsx_fixtures import write_xlsx, xlsx_bytes
 
 
 def _resolved(path: Path, name: str | None = None) -> ResolvedSource:
@@ -92,6 +95,84 @@ def test_container_detection_prefers_docx_when_both_markers_exist(tmp_path: Path
         archive.writestr("word/document.xml", "<docx/>")
 
     assert detect_document_type(_resolved(path)) is DocumentType.DOCX
+
+
+class _NamedBytesIO(io.BytesIO):
+    def __init__(self, data: bytes, name: str) -> None:
+        super().__init__(data)
+        self.name = name
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("source_kind", ["path", "bytes", "named_stream", "unnamed_stream"])
+async def test_detects_xlsx_across_all_public_input_shapes(
+    tmp_path: Path,
+    source_kind: str,
+) -> None:
+    path = tmp_path / "workbook.xlsx"
+    content = xlsx_bytes()
+    sources: dict[str, Source] = {
+        "path": path,
+        "bytes": content,
+        "named_stream": _NamedBytesIO(content, str(path)),
+        "unnamed_stream": io.BytesIO(content),
+    }
+    path.write_bytes(content)
+
+    async with materialize_source(sources[source_kind]) as resolved:
+        assert detect_document_type(resolved) is DocumentType.XLSX
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        {"include_workbook": False},
+        {"include_content_types": False},
+        {"workbook_content_type": "application/xml"},
+        {"include_root_relationships": False},
+        {"root_target": "xl/missing.xml"},
+    ],
+)
+def test_xlsx_identity_requires_content_type_root_relationship_and_workbook_part(
+    tmp_path: Path,
+    kwargs: dict[str, Any],
+) -> None:
+    path = tmp_path / "workbook.xlsx"
+    write_xlsx(path, **kwargs)
+
+    with pytest.raises(CorruptDocumentError):
+        detect_document_type(_resolved(path, "workbook.xlsx"))
+
+
+@pytest.mark.parametrize(
+    ("name", "member"),
+    [
+        ("workbook.xlsx", "word/document.xml"),
+        ("workbook.xlsx", "ppt/presentation.xml"),
+    ],
+)
+def test_xlsx_suffix_cannot_disguise_other_office_containers(
+    tmp_path: Path,
+    name: str,
+    member: str,
+) -> None:
+    path = tmp_path / "office"
+    with ZipFile(path, "w", ZIP_DEFLATED) as archive:
+        archive.writestr("[Content_Types].xml", "<Types/>")
+        archive.writestr(member, "<root/>")
+
+    with pytest.raises(DocumentTypeMismatchError):
+        detect_document_type(_resolved(path, name))
+
+
+def test_xlsx_container_cannot_disguise_itself_with_another_office_suffix(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "office"
+    write_xlsx(path)
+
+    with pytest.raises(DocumentTypeMismatchError):
+        detect_document_type(_resolved(path, "disguised.docx"))
 
 
 def test_unnamed_utf8_bytes_default_to_text(tmp_path: Path) -> None:

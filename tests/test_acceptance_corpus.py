@@ -165,3 +165,14 @@ def test_private_corpus_matches_manifest(
     path = corpus_dir / entry["name"]
     assert path.is_file(), f"missing acceptance file: {path}"
     assert _sha256(path) == entry["sha256"], f"hash mismatch: {path}"
+
+
+def test_private_xlsx_gate_is_not_run_until_a_maintainer_provides_a_real_workbook() -> None:
+    entries = _entries()
+    release_plan = (
+        Path(__file__).resolve().parents[1] / "docs/plans/2026-08-07-v0.2.0-release-plan.md"
+    ).read_text(encoding="utf-8")
+
+    assert not any(entry["name"].lower().endswith(".xlsx") for entry in entries)
+    assert "XLSX 私有探索门状态: `not_run`" in release_plan
+    assert "不得提交真实工作簿、hash、模型输出或完成检查表" in release_plan

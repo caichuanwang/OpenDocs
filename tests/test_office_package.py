@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import os
 import zipfile
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from pathlib import Path
+from typing import Any
 from zipfile import ZIP_DEFLATED, ZipFile
 
 import pytest
@@ -23,9 +24,10 @@ from opendocs.parsers.office.package import (
     validate_office_package,
 )
 from opendocs.source import ParseWorkspace
+from tests.xlsx_fixtures import minimal_xlsx_entries, write_xlsx
 
 
-def _write_zip(path: Path, entries: list[tuple[str | zipfile.ZipInfo, bytes]]) -> None:
+def _write_zip(path: Path, entries: Sequence[tuple[str | zipfile.ZipInfo, bytes]]) -> None:
     with ZipFile(path, "w", ZIP_DEFLATED) as archive:
         for name_or_info, data in entries:
             archive.writestr(name_or_info, data)
@@ -85,6 +87,237 @@ def test_validate_office_package_accepts_minimal_docx_and_pptx(tmp_path: Path) -
 
     assert docx_layout.main_part_name == "word/document.xml"
     assert pptx_layout.main_part_name == "ppt/presentation.xml"
+
+
+def test_validate_office_package_accepts_minimal_xlsx(tmp_path: Path) -> None:
+    xlsx = tmp_path / "sample.xlsx"
+    write_xlsx(xlsx)
+
+    layout = validate_office_package(xlsx, document_type=DocumentType.XLSX)
+
+    assert layout.main_part_name == "xl/workbook.xml"
+
+
+def test_validate_office_package_accepts_package_absolute_relationship_target(
+    tmp_path: Path,
+) -> None:
+    xlsx = tmp_path / "absolute-target.xlsx"
+    entries = minimal_xlsx_entries(include_workbook=False)
+    entries.extend(
+        [
+            (
+                "xl/workbook.xml",
+                b'<workbook xmlns="http://schemas.openxmlformats.org/'
+                b'spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/'
+                b'officeDocument/2006/relationships"><sheets><sheet name="Sheet" '
+                b'sheetId="1" r:id="rId1"/></sheets></workbook>',
+            ),
+            (
+                "xl/_rels/workbook.xml.rels",
+                b'<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/'
+                b'relationships"><Relationship Id="rId1" Type="http://schemas.'
+                b'openxmlformats.org/officeDocument/2006/relationships/worksheet" '
+                b'Target="/xl/worksheets/sheet1.xml"/></Relationships>',
+            ),
+            (
+                "xl/worksheets/sheet1.xml",
+                b'<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/'
+                b'main"><sheetData/></worksheet>',
+            ),
+        ]
+    )
+    _write_zip(xlsx, entries)
+
+    layout = validate_office_package(xlsx, document_type=DocumentType.XLSX)
+
+    assert layout.main_part_name == "xl/workbook.xml"
+
+
+@pytest.mark.parametrize(
+    "target",
+    [
+        "//server/xl/worksheets/sheet1.xml",
+        "\\xl\\worksheets\\sheet1.xml",
+        "https://example.com/sheet1.xml",
+        "C:/xl/worksheets/sheet1.xml",
+        "/../xl/worksheets/sheet1.xml",
+        "",
+    ],
+)
+def test_validate_office_package_rejects_unsafe_package_absolute_relationship_targets(
+    tmp_path: Path,
+    target: str,
+) -> None:
+    xlsx = tmp_path / "unsafe-absolute-target.xlsx"
+    entries = minimal_xlsx_entries(include_workbook=False)
+    entries.extend(
+        [
+            (
+                "xl/workbook.xml",
+                b'<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"/>',
+            ),
+            (
+                "xl/_rels/workbook.xml.rels",
+                (
+                    '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/'
+                    'relationships"><Relationship Id="rId1" Type="urn:test" '
+                    f'Target="{target}"/></Relationships>'
+                ).encode(),
+            ),
+            (
+                "xl/worksheets/sheet1.xml",
+                b'<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"/>',
+            ),
+        ]
+    )
+    _write_zip(xlsx, entries)
+
+    with pytest.raises(CorruptDocumentError, match="relationship target"):
+        validate_office_package(xlsx, document_type=DocumentType.XLSX)
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        {"include_content_types": False},
+        {"workbook_content_type": "application/xml"},
+        {"include_root_relationships": False},
+        {"root_target": "xl/missing.xml"},
+        {"root_target_mode": "External"},
+        {"include_workbook": False},
+    ],
+)
+def test_validate_xlsx_requires_internal_root_relationship_content_type_and_main_part(
+    tmp_path: Path,
+    kwargs: dict[str, Any],
+) -> None:
+    path = tmp_path / "sample.xlsx"
+    write_xlsx(path, **kwargs)
+
+    with pytest.raises(CorruptDocumentError):
+        validate_office_package(path, document_type=DocumentType.XLSX)
+
+
+@pytest.mark.parametrize("relationship_kind", ["root", "ordinary"])
+@pytest.mark.parametrize(
+    "payload",
+    [
+        b"""<!DOCTYPE Relationships [<!ENTITY payload "xl/workbook.xml">]>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="urn:test" Target="&payload;"/>
+</Relationships>""",
+        b"""<!DOCTYPE Relationships [<!ENTITY payload SYSTEM "file:///etc/passwd">]>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="urn:test" Target="&payload;"/>
+</Relationships>""",
+        b"""<!DOCTYPE Relationships>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"/>""",
+    ],
+    ids=["internal-entity", "external-entity", "dtd"],
+)
+def test_relationship_xml_rejects_dtd_and_entities_with_typed_corruption(
+    tmp_path: Path,
+    relationship_kind: str,
+    payload: bytes,
+) -> None:
+    path = tmp_path / "sample.xlsx"
+    entries = minimal_xlsx_entries()
+    if relationship_kind == "root":
+        entries = [(name, payload if name == "_rels/.rels" else data) for name, data in entries]
+    else:
+        entries.append(("xl/_rels/workbook.xml.rels", payload))
+    _write_zip(path, entries)
+
+    with pytest.raises(CorruptDocumentError, match="relationships are corrupt"):
+        validate_office_package(path, document_type=DocumentType.XLSX)
+
+
+@pytest.mark.parametrize(
+    ("entries", "error_type", "message"),
+    [
+        (
+            [*minimal_xlsx_entries(), ("../escape.xml", b"<x/>")],
+            CorruptDocumentError,
+            "unsafe member",
+        ),
+        (
+            [*minimal_xlsx_entries(), ("xl/workbook.xml", b"<workbook/>")],
+            CorruptDocumentError,
+            "duplicate",
+        ),
+        (
+            [
+                *minimal_xlsx_entries(),
+                (
+                    "xl/_rels/workbook.xml.rels",
+                    b"""<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+<Relationship Id="rId1" Type="urn:test" Target="missing.xml"/>
+</Relationships>""",
+                ),
+            ],
+            CorruptDocumentError,
+            "target is missing",
+        ),
+    ],
+)
+def test_validate_xlsx_rejects_unsafe_duplicate_and_dangling_members(
+    tmp_path: Path,
+    entries: list[tuple[str, bytes]],
+    error_type: type[Exception],
+    message: str,
+) -> None:
+    path = tmp_path / "sample.xlsx"
+    _write_zip(path, entries)
+
+    with pytest.raises(error_type, match=message):
+        validate_office_package(path, document_type=DocumentType.XLSX)
+
+
+def test_validate_xlsx_rejects_encrypted_members(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    path = tmp_path / "sample.xlsx"
+    write_xlsx(path)
+    original_infolist = ZipFile.infolist
+
+    def flagged_infolist(self: ZipFile) -> list[zipfile.ZipInfo]:
+        infos = original_infolist(self)
+        for info in infos:
+            if info.filename == "xl/workbook.xml":
+                info.flag_bits |= 0x1
+        return infos
+
+    monkeypatch.setattr("opendocs.parsers.office.package.ZipFile.infolist", flagged_infolist)
+
+    with pytest.raises(CorruptDocumentError, match="encrypted"):
+        validate_office_package(path, document_type=DocumentType.XLSX)
+
+
+def test_validate_xlsx_reuses_member_count_limit(tmp_path: Path) -> None:
+    path = tmp_path / "sample.xlsx"
+    _write_zip(
+        path,
+        [
+            *minimal_xlsx_entries(),
+            *[(f"xl/parts/part-{index}.xml", b"<x/>") for index in range(MAX_ARCHIVE_MEMBERS)],
+        ],
+    )
+
+    with pytest.raises(LimitExceededError, match="member count"):
+        validate_office_package(path, document_type=DocumentType.XLSX)
+
+
+def test_validate_xlsx_reuses_compression_ratio_limit(tmp_path: Path) -> None:
+    path = tmp_path / "sample.xlsx"
+    entries = [
+        (name, b"x" * (2 * 1024 * 1024) if name == "xl/workbook.xml" else data)
+        for name, data in minimal_xlsx_entries()
+    ]
+    _write_zip(path, entries)
+
+    with pytest.raises(LimitExceededError, match="compression ratio"):
+        validate_office_package(path, document_type=DocumentType.XLSX)
 
 
 def test_pptx_page_limit_is_checked_from_main_part_before_extraction(tmp_path: Path) -> None:

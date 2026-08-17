@@ -69,6 +69,7 @@ def build_default_registry(
     from opendocs.parsers.image import ImageParser
     from opendocs.parsers.office.parser import OfficeParser
     from opendocs.parsers.pdf.parser import PDFParser
+    from opendocs.parsers.xlsx import XlsxParser
 
     registry.register(DocumentType.IMAGE, ImageParser(runtime, vision, vision_config))
     registry.register(
@@ -82,5 +83,9 @@ def build_default_registry(
     registry.register(
         DocumentType.PPTX,
         OfficeParser(DocumentType.PPTX, runtime, vision, vision_config, deadline=deadline),
+    )
+    registry.register(
+        DocumentType.XLSX,
+        XlsxParser(runtime, vision, vision_config, deadline=deadline),
     )
     return registry
