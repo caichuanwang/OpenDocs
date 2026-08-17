@@ -9,7 +9,7 @@ OpenDocs is a Python SDK that converts local documents into clean Markdown —
 TXT, Markdown, images, PDF (native / hybrid / vision), DOCX, PPTX, and XLSX — through a unified
 sync/async API.
 
-> **Package name**: `opendocs-sdk` &nbsp;|&nbsp; **Import name**: `opendocs` &nbsp;|&nbsp; **Python**: 3.11+
+> **Package name**: `opendocs-sdk` &nbsp;|&nbsp; **Current Alpha**: `opendocs-sdk==0.2.0` &nbsp;|&nbsp; **Import name**: `opendocs` &nbsp;|&nbsp; **Python**: 3.11+
 
 ## Install
 
@@ -160,7 +160,7 @@ other visual styling fidelity.
 > with optional LLM-powered visual understanding, all through a clean sync/async API with typed errors.
 
 **Platforms**: Ubuntu and macOS on Python 3.11, 3.12, and 3.13 (Poppler required for visual PDF).
-Windows is unverified for `0.1.0`.
+Windows is unverified for `0.2.0`.
 
 **Privacy**: OpenDocs never downloads HTTP, OSS, or S3 URLs. Model calls send sanitized images to
 the provider selected by `VisionConfig` — review that provider's privacy and cost terms before

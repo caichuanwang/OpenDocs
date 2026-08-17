@@ -30,7 +30,7 @@ def test_example_depends_on_the_release_not_repository_internals() -> None:
     dependencies = project["project"]["dependencies"]
     serialized = (EXAMPLE / "pyproject.toml").read_text(encoding="utf-8")
 
-    assert dependencies == ["opendocs-sdk==0.1.0"]
+    assert dependencies == ["opendocs-sdk==0.2.0"]
     assert "path =" not in serialized
     assert "../" not in serialized
 
@@ -140,4 +140,4 @@ def test_public_docs_match_alpha_platform_and_concurrency_contracts() -> None:
     assert "vision_concurrency" in combined
     assert "asyncio.Semaphore" in combined
     assert "performance SLA" in combined
-    assert "opendocs-sdk==0.1.0" in combined
+    assert "opendocs-sdk==0.2.0" in combined

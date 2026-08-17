@@ -43,7 +43,7 @@ EXPECTED_PUBLIC_ALL = [
 
 
 def test_package_exposes_a_version() -> None:
-    assert opendocs.__version__ == "0.1.0"
+    assert opendocs.__version__ == "0.2.0"
 
 
 def test_package_public_all_stays_stable() -> None:
