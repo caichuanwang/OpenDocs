@@ -5,6 +5,8 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Downloads](https://img.shields.io/pypi/dm/opendocs-sdk.svg)](https://pypistats.org/packages/opendocs-sdk)
 
+> Language: **English** | [简体中文](README.zh-CN.md)
+
 OpenDocs is a Python SDK that converts local documents into clean Markdown —
 TXT, Markdown, images, PDF (native / hybrid / vision), DOCX, PPTX, and XLSX — through a unified
 sync/async API.
