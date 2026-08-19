@@ -7,6 +7,8 @@
 
 > 语言：[English](README.md) | **简体中文**
 
+![OpenDocs 将本地文档转换为整洁的 Markdown](docs/images/cover.png)
+
 OpenDocs 是一个 Python SDK，可将本地文档转换为整洁的 Markdown —— 支持 TXT、Markdown、图片、
 PDF（原生 / 混合 / 视觉）、DOCX、PPTX 和 XLSX —— 通过统一的同步/异步 API。
 
@@ -59,6 +61,8 @@ markdown = asyncio.run(main())
 
 远程下载由调用方负责。`http://`、`https://`、`oss://` 和 `s3://` 来源必须在调用 OpenDocs
 之前先下载到本地。
+
+![OpenDocs 架构：输入、检测、解析器、视觉管线与 Markdown 输出](docs/images/opendocs-architecture.svg)
 
 ## 支持的格式
 

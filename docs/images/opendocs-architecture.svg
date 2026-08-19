@@ -1,0 +1,153 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1160 760">
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&amp;display=swap');
+    text { font-family: 'JetBrains Mono', 'SF Mono', 'Cascadia Code', monospace; }
+  </style>
+  <defs>
+    <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse">
+      <path d="M 40 0 L 0 0 0 40" fill="none" stroke="#1e293b" stroke-width="0.5"/>
+    </pattern>
+    <marker id="arrow" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#64748b"/>
+    </marker>
+    <marker id="arrow-cyan" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#22d3ee"/>
+    </marker>
+    <marker id="arrow-emerald" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#34d399"/>
+    </marker>
+    <marker id="arrow-amber" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#fbbf24"/>
+    </marker>
+    <marker id="arrow-rose" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#fb7185"/>
+    </marker>
+  </defs>
+
+  <!-- Background -->
+  <rect width="1160" height="760" fill="#0f172a"/>
+  <rect width="1160" height="760" fill="url(#grid)"/>
+
+  <!-- Title -->
+  <text x="40" y="40" fill="#f8fafc" font-size="16" font-weight="700">OpenDocs — Parsing Pipeline</text>
+  <text x="40" y="58" fill="#94a3b8" font-size="9">Local documents → clean Markdown via native extraction + optional LLM vision</text>
+
+  <!-- INPUTS region -->
+  <rect x="40" y="80" width="560" height="130" rx="12" fill="none" stroke="#22d3ee" stroke-width="1" stroke-dasharray="8,4"/>
+  <text x="52" y="99" fill="#22d3ee" font-size="9" font-weight="600">INPUTS</text>
+  <!-- boxes: mask + visual -->
+  <rect x="60" y="116" width="160" height="56" rx="6" fill="#0f172a"/>
+  <rect x="60" y="116" width="160" height="56" rx="6" fill="rgba(8,51,68,0.4)" stroke="#22d3ee" stroke-width="1.5"/>
+  <text x="140" y="140" fill="white" font-size="11" font-weight="600" text-anchor="middle">Local Path</text>
+  <text x="140" y="157" fill="#94a3b8" font-size="9" text-anchor="middle">str / os.PathLike</text>
+  <rect x="240" y="116" width="160" height="56" rx="6" fill="#0f172a"/>
+  <rect x="240" y="116" width="160" height="56" rx="6" fill="rgba(8,51,68,0.4)" stroke="#22d3ee" stroke-width="1.5"/>
+  <text x="320" y="140" fill="white" font-size="11" font-weight="600" text-anchor="middle">Bytes</text>
+  <text x="320" y="157" fill="#94a3b8" font-size="9" text-anchor="middle">raw buffer</text>
+  <rect x="420" y="116" width="160" height="56" rx="6" fill="#0f172a"/>
+  <rect x="420" y="116" width="160" height="56" rx="6" fill="rgba(8,51,68,0.4)" stroke="#22d3ee" stroke-width="1.5"/>
+  <text x="500" y="140" fill="white" font-size="11" font-weight="600" text-anchor="middle">File Object</text>
+  <text x="500" y="157" fill="#94a3b8" font-size="9" text-anchor="middle">read() → bytes</text>
+
+  <!-- Inputs → Routing -->
+  <path d="M 140 172 L 140 210 L 360 210 L 360 248" fill="none" stroke="#64748b" stroke-width="1.5" stroke-opacity="0.6" marker-end="url(#arrow)"/>
+  <path d="M 320 172 L 320 248" fill="none" stroke="#64748b" stroke-width="1.5" stroke-opacity="0.6" marker-end="url(#arrow)"/>
+  <path d="M 500 172 L 500 210 L 360 210 L 360 248" fill="none" stroke="#64748b" stroke-width="1.5" stroke-opacity="0.6" marker-end="url(#arrow)"/>
+
+  <!-- Routing -->
+  <rect x="250" y="248" width="220" height="56" rx="6" fill="#0f172a"/>
+  <rect x="250" y="248" width="220" height="56" rx="6" fill="rgba(251,146,60,0.3)" stroke="#fb923c" stroke-width="1.5"/>
+  <text x="360" y="272" fill="white" font-size="11" font-weight="600" text-anchor="middle">Detection &amp; Routing</text>
+  <text x="360" y="289" fill="#94a3b8" font-size="9" text-anchor="middle">extension · MIME · magic bytes</text>
+
+  <!-- Routing → Parsers -->
+  <path d="M 360 304 L 360 348" fill="none" stroke="#64748b" stroke-width="1.5" marker-end="url(#arrow)"/>
+
+  <!-- PARSERS region -->
+  <rect x="40" y="348" width="560" height="210" rx="12" fill="none" stroke="#34d399" stroke-width="1" stroke-dasharray="8,4"/>
+  <text x="52" y="367" fill="#34d399" font-size="9" font-weight="600">PARSERS</text>
+  <!-- row 1 -->
+  <rect x="60" y="388" width="160" height="52" rx="6" fill="#0f172a"/>
+  <rect x="60" y="388" width="160" height="52" rx="6" fill="rgba(6,78,59,0.4)" stroke="#34d399" stroke-width="1.5"/>
+  <text x="140" y="410" fill="white" font-size="11" font-weight="600" text-anchor="middle">TXT / Markdown</text>
+  <text x="140" y="427" fill="#94a3b8" font-size="9" text-anchor="middle">deterministic text</text>
+  <rect x="240" y="388" width="160" height="52" rx="6" fill="#0f172a"/>
+  <rect x="240" y="388" width="160" height="52" rx="6" fill="rgba(6,78,59,0.4)" stroke="#34d399" stroke-width="1.5"/>
+  <text x="320" y="410" fill="white" font-size="11" font-weight="600" text-anchor="middle">PDF</text>
+  <text x="320" y="427" fill="#94a3b8" font-size="9" text-anchor="middle">native · hybrid · vision</text>
+  <rect x="420" y="388" width="160" height="52" rx="6" fill="#0f172a"/>
+  <rect x="420" y="388" width="160" height="52" rx="6" fill="rgba(6,78,59,0.4)" stroke="#34d399" stroke-width="1.5"/>
+  <text x="500" y="410" fill="white" font-size="11" font-weight="600" text-anchor="middle">Images</text>
+  <text x="500" y="427" fill="#94a3b8" font-size="9" text-anchor="middle">PNG · JPEG · WebP</text>
+  <!-- row 2 -->
+  <rect x="60" y="462" width="160" height="52" rx="6" fill="#0f172a"/>
+  <rect x="60" y="462" width="160" height="52" rx="6" fill="rgba(6,78,59,0.4)" stroke="#34d399" stroke-width="1.5"/>
+  <text x="140" y="484" fill="white" font-size="11" font-weight="600" text-anchor="middle">DOCX</text>
+  <text x="140" y="501" fill="#94a3b8" font-size="9" text-anchor="middle">body flow · tables</text>
+  <rect x="240" y="462" width="160" height="52" rx="6" fill="#0f172a"/>
+  <rect x="240" y="462" width="160" height="52" rx="6" fill="rgba(6,78,59,0.4)" stroke="#34d399" stroke-width="1.5"/>
+  <text x="320" y="484" fill="white" font-size="11" font-weight="600" text-anchor="middle">PPTX</text>
+  <text x="320" y="501" fill="#94a3b8" font-size="9" text-anchor="middle">slides · shape tree</text>
+  <rect x="420" y="462" width="160" height="52" rx="6" fill="#0f172a"/>
+  <rect x="420" y="462" width="160" height="52" rx="6" fill="rgba(6,78,59,0.4)" stroke="#34d399" stroke-width="1.5"/>
+  <text x="500" y="484" fill="white" font-size="11" font-weight="600" text-anchor="middle">XLSX</text>
+  <text x="500" y="501" fill="#94a3b8" font-size="9" text-anchor="middle">sheets · charts</text>
+
+  <!-- VISION PIPELINE region -->
+  <rect x="660" y="348" width="460" height="210" rx="12" fill="none" stroke="#fbbf24" stroke-width="1" stroke-dasharray="8,4"/>
+  <text x="672" y="367" fill="#fbbf24" font-size="9" font-weight="600">OPTIONAL VISION PIPELINE</text>
+  <rect x="680" y="388" width="132" height="52" rx="6" fill="#0f172a"/>
+  <rect x="680" y="388" width="132" height="52" rx="6" fill="rgba(120,53,15,0.3)" stroke="#fbbf24" stroke-width="1.5"/>
+  <text x="746" y="410" fill="white" font-size="11" font-weight="600" text-anchor="middle">VisionConfig</text>
+  <text x="746" y="427" fill="#94a3b8" font-size="9" text-anchor="middle">model · api key</text>
+  <rect x="824" y="388" width="132" height="52" rx="6" fill="#0f172a"/>
+  <rect x="824" y="388" width="132" height="52" rx="6" fill="rgba(120,53,15,0.3)" stroke="#fbbf24" stroke-width="1.5"/>
+  <text x="890" y="410" fill="white" font-size="11" font-weight="600" text-anchor="middle">LiteLLM</text>
+  <text x="890" y="427" fill="#94a3b8" font-size="9" text-anchor="middle">provider-neutral</text>
+  <rect x="968" y="388" width="132" height="52" rx="6" fill="#0f172a"/>
+  <rect x="968" y="388" width="132" height="52" rx="6" fill="rgba(120,53,15,0.3)" stroke="#fbbf24" stroke-width="1.5"/>
+  <text x="1034" y="410" fill="white" font-size="11" font-weight="600" text-anchor="middle">Vision Model</text>
+  <text x="1034" y="427" fill="#94a3b8" font-size="9" text-anchor="middle">e.g. gpt-image-2</text>
+  <path d="M 812 414 L 822 414" fill="none" stroke="#fbbf24" stroke-width="1.5" marker-end="url(#arrow-amber)"/>
+  <path d="M 956 414 L 966 414" fill="none" stroke="#fbbf24" stroke-width="1.5" marker-end="url(#arrow-amber)"/>
+
+  <!-- Parsers ↔ Vision (dashed, both directions) -->
+  <path d="M 600 414 L 658 414" fill="none" stroke="#fbbf24" stroke-width="1.5" stroke-dasharray="5,3" marker-end="url(#arrow-amber)"/>
+  <path d="M 658 440 L 602 440" fill="none" stroke="#fbbf24" stroke-width="1.5" stroke-dasharray="5,3" marker-end="url(#arrow-amber)"/>
+  <text x="629" y="405" fill="#fbbf24" font-size="8" text-anchor="middle">pages /</text>
+  <text x="629" y="414" fill="#fbbf24" font-size="8" text-anchor="middle">images</text>
+  <text x="629" y="452" fill="#fbbf24" font-size="8" text-anchor="middle">interpretation</text>
+
+  <!-- Vision annotation -->
+  <text x="680" y="480" fill="#94a3b8" font-size="8">fail-open: never replaces native facts</text>
+  <text x="680" y="492" fill="#94a3b8" font-size="8">raises VisionRequiredError when unusable</text>
+  <text x="680" y="508" fill="#fbbf24" font-size="8">Poppler (pdftoppm) required for visual PDF</text>
+
+  <!-- Parsers → Renderer -->
+  <path d="M 360 558 L 360 590 L 150 590 L 150 628" fill="none" stroke="#64748b" stroke-width="1.5" marker-end="url(#arrow)"/>
+
+  <!-- OUTPUT row -->
+  <rect x="40" y="628" width="220" height="56" rx="6" fill="#0f172a"/>
+  <rect x="40" y="628" width="220" height="56" rx="6" fill="rgba(59,130,246,0.3)" stroke="#60a5fa" stroke-width="1.5"/>
+  <text x="150" y="652" fill="white" font-size="11" font-weight="600" text-anchor="middle">Markdown Renderer</text>
+  <text x="150" y="669" fill="#94a3b8" font-size="9" text-anchor="middle">unified sync / async API</text>
+
+  <path d="M 260 656 L 298 656" fill="none" stroke="#60a5fa" stroke-width="1.5" marker-end="url(#arrow)"/>
+
+  <rect x="300" y="628" width="200" height="56" rx="6" fill="#0f172a"/>
+  <rect x="300" y="628" width="200" height="56" rx="6" fill="rgba(6,78,59,0.4)" stroke="#34d399" stroke-width="1.5"/>
+  <text x="400" y="652" fill="white" font-size="11" font-weight="600" text-anchor="middle">Clean Markdown</text>
+  <text x="400" y="669" fill="#94a3b8" font-size="9" text-anchor="middle">parse() / aparse()</text>
+
+  <path d="M 150 684 L 150 712 L 615 712 L 615 692" fill="none" stroke="#fb7185" stroke-width="1.5" stroke-opacity="0.7" marker-end="url(#arrow-rose)"/>
+  <path d="M 150 684 L 150 712 L 789 712 L 789 692" fill="none" stroke="#fb7185" stroke-width="1.5" stroke-opacity="0.7" marker-end="url(#arrow-rose)"/>
+
+  <rect x="540" y="692" width="150" height="52" rx="6" fill="#0f172a"/>
+  <rect x="540" y="692" width="150" height="52" rx="6" fill="rgba(136,19,55,0.4)" stroke="#fb7185" stroke-width="1.5"/>
+  <text x="615" y="714" fill="white" font-size="10" font-weight="600" text-anchor="middle">Warnings</text>
+  <text x="615" y="730" fill="#94a3b8" font-size="8" text-anchor="middle">OpenDocsWarning</text>
+  <rect x="714" y="692" width="150" height="52" rx="6" fill="#0f172a"/>
+  <rect x="714" y="692" width="150" height="52" rx="6" fill="rgba(136,19,55,0.4)" stroke="#fb7185" stroke-width="1.5"/>
+  <text x="789" y="714" fill="white" font-size="10" font-weight="600" text-anchor="middle">Typed Errors</text>
+  <text x="789" y="730" fill="#94a3b8" font-size="8" text-anchor="middle">OpenDocsError</text>
+</svg>

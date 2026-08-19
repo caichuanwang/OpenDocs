@@ -233,5 +233,8 @@ benchmarks/document_parsing/manifest.local.json
 .serena
 .omx
 
+# Local baoyu-skills preferences (API keys live outside the repo)
+.baoyu-skills/
+
 # macOS
 .DS_Store

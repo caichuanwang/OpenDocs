@@ -7,6 +7,8 @@
 
 > Language: **English** | [简体中文](README.zh-CN.md)
 
+![OpenDocs converts local documents to clean Markdown](docs/images/cover.png)
+
 OpenDocs is a Python SDK that converts local documents into clean Markdown —
 TXT, Markdown, images, PDF (native / hybrid / vision), DOCX, PPTX, and XLSX — through a unified
 sync/async API.
@@ -60,6 +62,8 @@ Accepted inputs:
 
 Callers own all remote downloads. `http://`, `https://`, `oss://`, and `s3://` sources must be
 downloaded before calling OpenDocs.
+
+![OpenDocs architecture: inputs, detection, parsers, vision pipeline, and Markdown output](docs/images/opendocs-architecture.svg)
 
 ## Supported formats
 
