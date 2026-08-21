@@ -1,0 +1,50 @@
+name: 📚 Documentation
+description: 报告文档问题、缺失或翻译改进 · Report a docs issue or translation improvement
+title: "[Docs]: "
+labels: ["documentation", "needs triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        涉及 README（中/英）、`docs/`（roadmap、plans、archive）或示例代码。
+        可用中文或 English 填写。
+  - type: dropdown
+    id: location
+    attributes:
+      label: Where?
+      options:
+        - README (English)
+        - README.zh-CN (中文)
+        - docs/ (roadmap / plans / archive)
+        - Examples (examples/)
+        - Inline docstrings / API docs
+        - CHANGELOG
+        - Other
+    validations:
+      required: true
+  - type: dropdown
+    id: kind
+    attributes:
+      label: Issue type
+      options:
+        - Incorrect / outdated information
+        - Missing documentation
+        - Unclear / hard to follow
+        - Translation issue (中英不一致)
+        - Broken link or example
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: details
+    attributes:
+      label: Details
+      description: 具体位置（文件 + 章节/行）与建议的修改内容。
+    validations:
+      required: true
+  - type: input
+    id: ref
+    attributes:
+      label: Reference
+      description: 相关链接或文件路径
+      placeholder: "README.zh-CN.md 安装章节"

@@ -1,0 +1,92 @@
+name: 🐛 Bug report
+description: 报告一个可复现的问题（默认模板）· Report a reproducible problem
+title: "[Bug]: "
+labels: ["bug", "needs triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        感谢报告问题！请先[搜索现有 issues](https://github.com/caichuanwang/OpenDocs/issues?q=is%3Aissue)
+        避免重复，并附上**最小可复现示例**。涉及私有文档时，请只描述文档结构，不要上传内容。
+        可用中文或 English 填写。
+
+        Thanks for reporting! Please [search existing issues](https://github.com/caichuanwang/OpenDocs/issues?q=is%3Aissue)
+        first, and include a **minimal reproduction**. For private documents, describe the structure only — never upload content.
+  - type: input
+    id: version
+    attributes:
+      label: opendocs-sdk version
+      description: 运行 `pip show opendocs-sdk` 获取。若从源码安装请附 commit。
+      placeholder: "0.2.0"
+    validations:
+      required: true
+  - type: input
+    id: python
+    attributes:
+      label: Python version
+      description: 例如 3.11 / 3.12 / 3.13
+      placeholder: "3.12"
+    validations:
+      required: true
+  - type: input
+    id: os
+    attributes:
+      label: Operating system
+      description: 例如 macOS 15 / Ubuntu 24.04 / Windows 11
+      placeholder: "macOS 15"
+    validations:
+      required: true
+  - type: dropdown
+    id: format
+    attributes:
+      label: Document format
+      description: 涉及的文件格式（可多选）
+      multiple: true
+      options:
+        - TXT / Markdown
+        - Image (PNG / JPEG / WebP)
+        - PDF (native / hybrid / vision)
+        - DOCX
+        - PPTX
+        - XLSX
+        - Other / Not sure
+    validations:
+      required: true
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: 实际行为 vs 期望行为。解析结果如有缺失/错乱，请概括性地描述（勿粘贴整篇输出）。
+      placeholder: |
+        期望: ...
+        实际: ...
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Minimal reproduction
+      description: 最小可复现代码，以及输入文档的**结构描述**（页数/表格/图片/混合内容等）。
+      render: python
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs / error output
+      description: 完整的错误堆栈或 warning 输出（如有）。
+      render: shell
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Verification
+      description: 请确认已自查以下内容，可加快处理
+      options:
+        - label: 使用最新版本（`pip install -U opendocs-sdk`）复现
+        - label: 已搜索现有 issues，未发现重复
+        - label: 问题与视觉模型（Vision）无关，或已提供 `OPENDOCS_VISION_MODEL` 配置
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional context
+      description: 其他有助于定位的信息（调用方式、并发、环境变量等）。

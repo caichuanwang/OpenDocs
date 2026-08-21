@@ -1,0 +1,27 @@
+name: 💬 Question
+description: 使用咨询、行为确认或架构讨论 · Ask a question about usage or behavior
+title: "[Question]: "
+labels: ["question"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        提问前建议先查阅 [README](https://github.com/caichuanwang/OpenDocs#readme)、
+        [docs/](https://github.com/caichuanwang/OpenDocs/tree/master/docs) 与
+        [CONTRIBUTING.md](https://github.com/caichuanwang/OpenDocs/blob/master/CONTRIBUTING.md)。
+        可用中文或 English 提问。
+
+        Please check the README, docs/, and CONTRIBUTING.md first. You may write in 简体中文 or English.
+  - type: textarea
+    id: question
+    attributes:
+      label: Your question
+      description: 说明使用场景、已尝试的方案与期望的结果。
+    validations:
+      required: true
+  - type: input
+    id: context
+    attributes:
+      label: Context
+      description: 相关版本/格式/代码片段位置（可选）
+      placeholder: "opendocs-sdk 0.2.0, 解析 PPTX 时……"

@@ -1,0 +1,12 @@
+# https://docs.github.com/communities/using-templates-to-encourage-useful-issues-and-pull-requests/configuring-issue-templates-for-your-repository
+blank_issues_enabled: true
+contact_links:
+  - name: 📖 Documentation
+    url: https://github.com/caichuanwang/OpenDocs/tree/master/docs
+    about: 阅读文档与路线图（docs/roadmap.md、docs/plans/）· Read the docs and roadmap first
+  - name: 🚀 Contributing Guide
+    url: https://github.com/caichuanwang/OpenDocs/blob/master/CONTRIBUTING.md
+    about: 贡献指南与验证门禁 · How to contribute and verify changes
+  - name: 📦 PyPI
+    url: https://pypi.org/project/opendocs-sdk/
+    about: 发布版本与下载统计 · Releases and download stats

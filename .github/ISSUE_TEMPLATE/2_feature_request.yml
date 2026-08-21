@@ -1,0 +1,64 @@
+name: ✨ Feature request
+description: 提议新功能、新格式支持或 API 改进 · Propose a new feature or improvement
+title: "[Feature]: "
+labels: ["enhancement", "needs triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        功能建议请说明**要解决的真实问题**与使用场景，而非仅描述实现方式。
+        可用中文或 English 填写。
+
+        Describe the **real problem** and use case you want to solve, not just an implementation idea.
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem statement
+      description: 你遇到什么问题？在什么场景下需要这个能力？
+      placeholder: 例如：我的工作流需要解析 .eml 邮件附件中的表格……
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: 你期望的 API、行为或输出形态（越具体越好）。
+      placeholder: 例如：新增 format: eml 支持，或为 ParseOptions 增加 xxx 选项……
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: 你尝试过的替代方案及其不足。
+  - type: dropdown
+    id: scope
+    attributes:
+      label: Affected area
+      description: 该需求影响的领域（可多选）
+      multiple: true
+      options:
+        - New document format
+        - Existing format quality
+        - Public API / ParseOptions
+        - Error handling / diagnostics
+        - Performance / concurrency
+        - Documentation / i18n
+        - Other
+    validations:
+      required: true
+  - type: dropdown
+    id: priority
+    attributes:
+      label: Priority (self-assessment)
+      description: 该需求对你的阻塞程度（仅作参考，由维护者最终定级）
+      options:
+        - Low — nice to have
+        - Medium — would help regularly
+        - High — blocking my workflow
+        - Critical — cannot use the SDK without it
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional context
+      description: 示例文档结构描述、链接、截图等（勿上传私有文档）。
